@@ -1,0 +1,78 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import {
+  consumeForJob,
+  coverage,
+  ensureStockArticle,
+  exampleStock,
+  hasShortage,
+  jobNeedFromQuote,
+  stockStatus,
+  stockValue,
+  toOrder,
+} from "./stock.ts";
+
+test("exemple stock : valeur et seuils", () => {
+  const items = exampleStock();
+  assert.equal(stockStatus(items[0]!), "ok");
+  assert.ok(stockValue(items) > 0);
+});
+
+test("couverture devis : 2 panneaux 400 + 4 charnières + 2 poignées", () => {
+  const need = jobNeedFromQuote(
+    { A: 2, B: 0 },
+    [
+      { id: "1", name: "Charnières invisibles", qty: "4", unitPrice: "4.5" },
+      { id: "2", name: "Poignées inox", qty: "2", unitPrice: "6" },
+    ],
+  );
+  const lines = coverage(exampleStock(), need);
+  assert.equal(hasShortage(lines), false);
+  const a = lines.find((l) => l.key === "panel-A");
+  assert.equal(a?.needed, 2);
+  assert.equal(a?.onHand, 10);
+  assert.equal(toOrder(lines).length, 0);
+});
+
+test("pénurie détectée si trop de panneaux 600", () => {
+  const lines = coverage(exampleStock(), {
+    panelsA: 0,
+    panelsB: 99,
+    hardware: [],
+  });
+  assert.equal(hasShortage(lines), true);
+  assert.equal(lines.find((l) => l.key === "panel-B")?.gap, 93);
+  assert.deepEqual(toOrder(lines), [{ name: "Panneau 2500 × 600 mm", qty: 93 }]);
+});
+
+test("déduction chantier retire les quantités", () => {
+  const start = exampleStock();
+  const need = jobNeedFromQuote(
+    { A: 2, B: 0 },
+    [{ id: "1", name: "Charnières invisibles", qty: "4", unitPrice: "4.5" }],
+  );
+  const out = consumeForJob(start, [], need, "DEVIS-2026-001", false);
+  assert.equal(out.ok, true);
+  const a = out.items.find((i) => i.id === "stock-panel-A");
+  const h = out.items.find((i) => i.name === "Charnières invisibles");
+  assert.equal(a?.qty, 8);
+  assert.equal(h?.qty, 12);
+  assert.equal(out.moves.length, 2);
+});
+
+test("déduction bloquée si stock insuffisant (sans partiel)", () => {
+  const need = { panelsA: 99, panelsB: 0, hardware: [] };
+  const out = consumeForJob(exampleStock(), [], need, "X", false);
+  assert.equal(out.ok, false);
+  assert.equal(out.items.find((i) => i.id === "stock-panel-A")?.qty, 10);
+});
+
+test("créer un article hors stock sans doublon", () => {
+  const start = exampleStock();
+  const next = ensureStockArticle(start, "Charnières invisibles", 4.5);
+  assert.equal(next.length, start.length);
+  const added = ensureStockArticle(start, "Tiroirs métalliques", 12);
+  assert.equal(added.length, start.length + 1);
+  assert.equal(added.at(-1)?.qty, 0);
+  assert.equal(added.at(-1)?.name, "Tiroirs métalliques");
+});

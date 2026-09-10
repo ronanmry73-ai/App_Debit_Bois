@@ -1,0 +1,38 @@
+{
+  "url": "http://127.0.0.1:8081/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Débit Bois",
+      "hasCanvas": false,
+      "bodyTextLen": 5262,
+      "bodyTextHash": "e7c5b7f0f9e9a6e1fba5874bf82035321431ec672f45bfadf5aea84d09b2aff5",
+      "bodyTextPrefix": "Débit Bois Panneaux 2500 × 400 mm et 2500 × 600 mm Exemple Exemp",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Débit Bois",
+      "hasCanvas": false,
+      "bodyTextLen": 5532,
+      "bodyTextHash": "152c27c9b2c6364ee449739020f5246f2c32c05ff8ffbc385d4d9f7fbe2e37c6",
+      "bodyTextPrefix": "Débit Bois Panneaux 2500 × 400 mm et 2500 × 600 mm Exemple Exemp",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-built.json",
+  "divergesFromBaseline": false,
+  "baselineReasons": []
+}
