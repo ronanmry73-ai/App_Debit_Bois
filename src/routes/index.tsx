@@ -76,7 +76,7 @@ import {
 } from "@/lib/persist";
 import type { AppSettings, PieceRow } from "@/lib/types";
 import { effectivePurchasePrice, supplierCostFromCounts } from "@/lib/supplier";
-import { newId } from "@/lib/utils";
+import { newId, cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -728,11 +728,18 @@ function Home() {
   }
 
   const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
+  const stockWide = !catalogOpen && viewMode === "stock";
+  const shellWidth = stockWide ? "max-w-none" : "max-w-6xl";
 
   return (
     <div className="min-h-dvh">
       <header className="no-print border-b border-border bg-card/80">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6">
+        <div
+          className={cn(
+            "mx-auto flex w-full flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6",
+            shellWidth,
+          )}
+        >
           <div className="flex items-center gap-3">
             <Logo />
             <div>
@@ -810,7 +817,12 @@ function Home() {
         </div>
       </header>
 
-      <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-6 sm:px-6 sm:py-8">
+      <main
+        className={cn(
+          "mx-auto flex w-full flex-col gap-8 px-4 py-6 sm:px-6 sm:py-8",
+          shellWidth,
+        )}
+      >
         {(flash || error) && (
           <div className="no-print space-y-2">
             {flash && (
@@ -1150,7 +1162,12 @@ function Home() {
         )}
       </main>
 
-      <footer className="app-footer no-print mx-auto max-w-6xl px-4 pb-10 text-xs text-muted-foreground sm:px-6">
+      <footer
+        className={cn(
+          "app-footer no-print mx-auto w-full px-4 pb-10 text-xs text-muted-foreground sm:px-6",
+          shellWidth,
+        )}
+      >
         Unités en millimètres. Atelier, stock et devis. Catalogue à part. Le projet
         est un fichier : enregistrez pour le conserver.
       </footer>
