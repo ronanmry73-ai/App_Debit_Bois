@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, shell, dialog } from "electron";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,12 +8,12 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const DEV_URL = process.env.DEBIT_BOIS_URL || "http://127.0.0.1:8080";
-const PREVIEW_PORT = Number(process.env.DEBIT_BOIS_PREVIEW_PORT || 8081);
 
 /** @type {import('node:child_process').ChildProcess | null} */
 let child = null;
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
+let expectingChildExit = false;
 
 function isPortFree(port, host = "127.0.0.1") {
   return new Promise((resolve) => {
@@ -25,7 +26,7 @@ function isPortFree(port, host = "127.0.0.1") {
   });
 }
 
-function waitForHttp(url, timeoutMs = 90_000) {
+function waitForHttp(url, timeoutMs = 120_000) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const tick = async () => {
@@ -48,22 +49,75 @@ function waitForHttp(url, timeoutMs = 90_000) {
   });
 }
 
-function spawnNpm(script, extraEnv = {}) {
-  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-  const proc = spawn(npmCmd, ["run", script], {
+function findNode() {
+  const fromNpm = process.env.npm_node_execpath;
+  if (fromNpm && existsSync(fromNpm)) return fromNpm;
+
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  const candidates = [
+    process.env.NODE_EXE,
+    "C:\\Program Files\\nodejs\\node.exe",
+    "C:\\Program Files (x86)\\nodejs\\node.exe",
+    path.join(home, "AppData\\Local\\Programs\\nodejs\\node.exe"),
+    "/usr/local/bin/node",
+    "/usr/bin/node",
+    "node",
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (candidate === "node" || existsSync(candidate)) return candidate;
+  }
+  return "node";
+}
+
+function withNodeOnPath(env) {
+  const nodeDir = path.dirname(findNode());
+  const bin = path.join(ROOT, "node_modules", ".bin");
+  const key = process.platform === "win32" ? "Path" : "PATH";
+  const current = env[key] || env.PATH || "";
+  const sep = process.platform === "win32" ? ";" : ":";
+  return { ...env, PATH: `${bin}${sep}${nodeDir}${sep}${current}`, Path: `${bin}${sep}${nodeDir}${sep}${current}` };
+}
+
+function startDevServer() {
+  const node = findNode();
+  const wrapper = path.join(ROOT, "scripts", "with-app-env.mjs");
+  const viteJs = path.join(ROOT, "node_modules", "vite", "bin", "vite.js");
+
+  if (!existsSync(path.join(ROOT, "node_modules", "vite"))) {
+    throw new Error(
+      "Les dépendances ne sont pas installées.\nDans le terminal VS Code, lance :\n\nnpm install",
+    );
+  }
+  if (!existsSync(wrapper)) {
+    throw new Error("Fichier manquant : scripts/with-app-env.mjs");
+  }
+
+  const args = existsSync(viteJs)
+    ? [wrapper, node, viteJs, "dev", "--host", "127.0.0.1", "--port", "8080"]
+    : [wrapper, "vite", "dev", "--host", "127.0.0.1", "--port", "8080"];
+
+  const proc = spawn(node, args, {
     cwd: ROOT,
-    env: { ...process.env, ...extraEnv },
+    env: withNodeOnPath(process.env),
     stdio: "inherit",
-    shell: process.platform === "win32",
+    windowsHide: true,
   });
+
   proc.on("exit", (code) => {
-    if (!app.isQuiting && code && code !== 0) {
+    if (expectingChildExit || app.isQuiting) return;
+    if (code && code !== 0) {
       dialog.showErrorBox(
         "Débit Bois",
-        `Le serveur interne s'est arrêté (code ${code}).`,
+        `Le serveur interne s'est arrêté (code ${code}).\n\n` +
+          "Ouvre un terminal dans VS Code et lance :\n\n" +
+          "  npm run dev\n\n" +
+          "Attends le message localhost:8080, puis dans un 2e terminal :\n\n" +
+          "  npm run desktop:win",
       );
     }
   });
+
   return proc;
 }
 
@@ -71,21 +125,9 @@ async function ensureServer() {
   if (!(await isPortFree(8080))) {
     return DEV_URL;
   }
-  if (!(await isPortFree(PREVIEW_PORT))) {
-    return `http://127.0.0.1:${PREVIEW_PORT}`;
-  }
-
-  child = spawnNpm("preview");
-  const previewUrl = `http://127.0.0.1:${PREVIEW_PORT}`;
-  try {
-    await waitForHttp(previewUrl, 20_000);
-    return previewUrl;
-  } catch {
-    if (child && !child.killed) child.kill();
-    child = spawnNpm("dev");
-    await waitForHttp(DEV_URL);
-    return DEV_URL;
-  }
+  child = startDevServer();
+  await waitForHttp(DEV_URL);
+  return DEV_URL;
 }
 
 function buildMenu() {
@@ -202,8 +244,10 @@ app.whenReady().then(async () => {
     dialog.showErrorBox(
       "Débit Bois — démarrage impossible",
       `${err instanceof Error ? err.message : String(err)}\n\n` +
-        "Lancez d'abord dans un terminal :\n  npm install\n  npm run dev\n\n" +
-        "Puis relancez : npm run desktop",
+        "Dans le terminal VS Code :\n\n" +
+        "  git pull\n  npm install\n  npm run dev\n\n" +
+        "Quand tu vois http://localhost:8080, ouvre un 2e terminal :\n\n" +
+        "  npm run desktop:win",
     );
     app.quit();
   }
@@ -222,5 +266,6 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   app.isQuiting = true;
+  expectingChildExit = true;
   if (child && !child.killed) child.kill();
 });
