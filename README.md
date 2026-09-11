@@ -18,7 +18,16 @@ Autres commandes :
 ```bash
 npm run build       # production (sortie Vercel / Nitro)
 npm run typecheck
+npm run desktop     # fenêtre native Electron
 ```
+
+## Application desktop
+
+Voir [DESKTOP.md](DESKTOP.md) pour :
+
+1. Installer comme PWA depuis Chrome / Edge
+2. Lancer une fenêtre Electron (`npm run desktop`)
+3. Produire un installateur `.exe` / `.dmg` / AppImage (`npm run desktop:dist`)
 
 ## Déployer sur Vercel
 
@@ -42,6 +51,7 @@ Aucune variable d’environnement n’est nécessaire. Le build est `npm run bui
 | `src/lib/pricing.ts` | Prix de vente, TVA |
 | `src/lib/stock.ts` | Stocks panneaux et quincaillerie |
 | `src/routes/index.tsx` | Page unique |
+| `electron/` | Coque desktop (Electron) |
 | `public/og.jpg` | Image de partage |
 
-Unités en millimètres. Impression / PDF via le navigateur.
+Unités en millimètres. Impression / PDF via le navigateur ou `Ctrl+P` dans Electron.
