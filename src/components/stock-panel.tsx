@@ -1,22 +1,20 @@
-import { Plus, Trash2, ArrowDownToLine, ArrowUpFromLine, Package } from "lucide-react";
-import { useState } from "react";
+import { Plus, Trash2, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { Catalog } from "@/lib/catalog";
+import { familyById } from "@/lib/catalog";
 import {
   applyDelta,
-  consumeForJob,
-  coverage,
   emptyStockItem,
   exampleStock,
-  hasShortage,
   recordMove,
   stockStatus,
+  stockSurfaceM2,
   stockValue,
-  toOrder,
-  type JobNeed,
   type StockItem,
   type StockKind,
   type StockMove,
@@ -28,35 +26,37 @@ type Props = {
   moves: StockMove[];
   onItems: (items: StockItem[]) => void;
   onMoves: (moves: StockMove[]) => void;
-  need: JobNeed | null;
-  quoteNumber: string;
+  catalog: Catalog;
 };
 
 const KIND_LABEL: Record<StockKind, string> = {
   "panel-A": "Panneau 400",
   "panel-B": "Panneau 600",
   hardware: "Quincaillerie",
-  other: "Autre",
+  other: "Panneau / autre",
 };
 
-export function StockPanel({
-  items,
-  moves,
-  onItems,
-  onMoves,
-  need,
-  quoteNumber,
-}: Props) {
+export function StockPanel({ items, moves, onItems, onMoves, catalog }: Props) {
   const [filter, setFilter] = useState<"all" | StockKind>("all");
+  const [familyFilter, setFamilyFilter] = useState<"all" | string>("all");
+  const [q, setQ] = useState("");
   const [draftQty, setDraftQty] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
   const value = stockValue(items);
   const alerts = items.filter((it) => stockStatus(it) !== "ok");
-  const visible =
-    filter === "all" ? items : items.filter((it) => it.kind === filter);
-  const lines = need ? coverage(items, need).filter((l) => l.needed > 0) : [];
-  const shortage = lines.length > 0 && hasShortage(lines);
-  const order = toOrder(lines);
+
+  const visible = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return items.filter((it) => {
+      if (filter !== "all" && it.kind !== filter) return false;
+      if (familyFilter !== "all" && it.familyId !== familyFilter) return false;
+      if (!needle) return true;
+      const fam = it.familyId ? familyById(catalog, it.familyId)?.name ?? "" : "";
+      return `${it.name} ${it.sku} ${fam} ${it.notes ?? ""} ${it.length ?? ""}x${it.width ?? ""}`
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [items, filter, familyFilter, q, catalog]);
 
   function qtyInput(id: string, fallback: number): string {
     return draftQty[id] ?? String(fallback === 0 ? 1 : 1);
@@ -77,27 +77,7 @@ export function StockPanel({
         type === "in" ? "Entrée stock" : "Sortie manuelle",
       ),
     );
-    setMessage(
-      type === "in"
-        ? `+${qty} ${item.name}`
-        : `−${qty} ${item.name}`,
-    );
-  }
-
-  function consume(partial: boolean) {
-    if (!need) return;
-    const out = consumeForJob(items, moves, need, quoteNumber, partial);
-    if (!out.ok) {
-      setMessage("Stock insuffisant. Sortez le disponible, ou commandez le manque.");
-      return;
-    }
-    onItems(out.items);
-    onMoves(out.moves);
-    setMessage(
-      partial
-        ? "Sortie partielle enregistrée."
-        : `Sortie chantier ${quoteNumber || ""} enregistrée.`,
-    );
+    setMessage(type === "in" ? `+${qty} ${item.name}` : `−${qty} ${item.name}`);
   }
 
   return (
@@ -113,7 +93,7 @@ export function StockPanel({
                 Stocks atelier
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Panneaux et quincaillerie. Valeur {formatEuro(value)}
+                Stock global, indépendant des projets. Valeur {formatEuro(value)}
                 {alerts.length > 0
                   ? ` · ${alerts.length} alerte${alerts.length > 1 ? "s" : ""}`
                   : ""}
@@ -142,6 +122,26 @@ export function StockPanel({
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
+            <Input
+              className="max-w-xs"
+              placeholder="Rechercher une référence…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              aria-label="Rechercher dans le stock"
+            />
+            <select
+              className="flex h-11 rounded-md border border-input bg-card px-3 text-sm"
+              value={familyFilter}
+              onChange={(e) => setFamilyFilter(e.target.value)}
+              aria-label="Filtrer le stock par famille"
+            >
+              <option value="all">Toutes les familles</option>
+              {catalog.families.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
             {(
               [
                 ["all", "Tout"],
@@ -172,10 +172,14 @@ export function StockPanel({
               <thead>
                 <tr className="border-b border-border bg-muted/60 text-left text-muted-foreground">
                   <th className="px-3 py-2.5 font-medium">Article</th>
+                  <th className="px-3 py-2.5 font-medium">Famille</th>
+                  <th className="px-3 py-2.5 font-medium">Dimensions</th>
                   <th className="px-3 py-2.5 font-medium">Type</th>
                   <th className="w-24 px-3 py-2.5 font-medium">Qté</th>
+                  <th className="px-3 py-2.5 font-medium">Surface</th>
                   <th className="w-20 px-3 py-2.5 font-medium">Mini</th>
-                  <th className="w-28 px-3 py-2.5 font-medium">Coût</th>
+                  <th className="px-3 py-2.5 font-medium">Notes</th>
+                  <th className="px-3 py-2.5 font-medium">Modifié</th>
                   <th className="px-3 py-2.5 font-medium">État</th>
                   <th className="px-3 py-2.5 font-medium">Mouvement</th>
                 </tr>
@@ -185,12 +189,23 @@ export function StockPanel({
                   <StockRow
                     key={item.id}
                     item={item}
+                    familyName={
+                      item.familyId
+                        ? familyById(catalog, item.familyId)?.name ?? ""
+                        : ""
+                    }
                     draft={qtyInput(item.id, 1)}
                     onDraft={(v) =>
                       setDraftQty((d) => ({ ...d, [item.id]: v }))
                     }
                     onPatch={(patch) =>
-                      onItems(items.map((it) => (it.id === item.id ? { ...it, ...patch } : it)))
+                      onItems(
+                        items.map((it) =>
+                          it.id === item.id
+                            ? { ...it, ...patch, updatedAt: new Date().toISOString() }
+                            : it,
+                        ),
+                      )
                     }
                     onIn={() => receive(item, "in")}
                     onOut={() => receive(item, "out")}
@@ -224,6 +239,14 @@ export function StockPanel({
                   />
                   <StatusBadge item={item} />
                 </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {item.length && item.width
+                    ? `${item.length} × ${item.width} mm`
+                    : KIND_LABEL[item.kind]}
+                  {item.familyId
+                    ? ` · ${familyById(catalog, item.familyId)?.name ?? ""}`
+                    : ""}
+                </p>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   <Num
                     label="Qté"
@@ -277,59 +300,6 @@ export function StockPanel({
             ))}
           </ul>
 
-          {lines.length > 0 && (
-            <div className="mt-6 rounded-lg bg-muted/70 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-display text-base font-medium">
-                  Besoin du chantier
-                </p>
-                {shortage ? (
-                  <Badge variant="warn">Manque</Badge>
-                ) : (
-                  <Badge variant="good">Couvert par le stock</Badge>
-                )}
-              </div>
-              <ul className="mt-3 space-y-1.5 text-sm">
-                {lines.map((l) => (
-                  <li
-                    key={l.key}
-                    className="flex flex-wrap items-baseline justify-between gap-2"
-                  >
-                    <span>{l.name}</span>
-                    <span className="tabular-nums text-muted-foreground">
-                      besoin {l.needed} · stock {l.onHand}
-                      {l.gap > 0 ? ` · à commander ${l.gap}` : ""}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              {order.length > 0 && (
-                <p className="mt-2 text-sm text-warn">
-                  À commander : {order.map((o) => `${o.name} ×${o.qty}`).join(", ")}
-                </p>
-              )}
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  onClick={() => consume(false)}
-                  disabled={shortage}
-                >
-                  <Package />
-                  Déduire du stock
-                </Button>
-                {shortage && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => consume(true)}
-                  >
-                    Sortir le disponible
-                  </Button>
-                )}
-              </div>
-            </div>
-          )}
-
           {message && (
             <p className="mt-3 text-sm text-ink-soft">{message}</p>
           )}
@@ -340,15 +310,24 @@ export function StockPanel({
                 Derniers mouvements
               </h3>
               <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
-                {moves.slice(0, 8).map((m) => {
+                {moves.slice(0, 12).map((m) => {
                   const it = items.find((i) => i.id === m.itemId);
                   const sign = m.type === "in" ? "+" : m.type === "out" ? "−" : "±";
                   return (
                     <li key={m.id} className="tabular-nums">
                       {sign}
                       {m.qty} {it?.name ?? "article"}
+                      {m.projectName ? ` · ${m.projectName}` : ""}
                       {m.quoteNumber ? ` · ${m.quoteNumber}` : ""}
                       {m.note ? ` · ${m.note}` : ""}
+                      {m.date
+                        ? ` · ${new Date(m.date).toLocaleString("fr-FR", {
+                            day: "2-digit",
+                            month: "short",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}`
+                        : ""}
                     </li>
                   );
                 })}
@@ -363,6 +342,7 @@ export function StockPanel({
 
 function StockRow({
   item,
+  familyName,
   draft,
   onDraft,
   onPatch,
@@ -371,6 +351,7 @@ function StockRow({
   onRemove,
 }: {
   item: StockItem;
+  familyName: string;
   draft: string;
   onDraft: (v: string) => void;
   onPatch: (patch: Partial<StockItem>) => void;
@@ -379,6 +360,7 @@ function StockRow({
   onRemove: () => void;
 }) {
   const locked = item.kind === "panel-A" || item.kind === "panel-B";
+  const surface = stockSurfaceM2(item);
   return (
     <tr className="border-b border-border last:border-0">
       <td className="px-2 py-1.5">
@@ -394,6 +376,10 @@ function StockRow({
           onChange={(e) => onPatch({ sku: e.target.value })}
           aria-label="Référence"
         />
+      </td>
+      <td className="px-3 py-2 text-muted-foreground">{familyName || "—"}</td>
+      <td className="px-3 py-2 tabular-nums text-muted-foreground">
+        {item.length && item.width ? `${item.length} × ${item.width}` : "—"}
       </td>
       <td className="px-2 py-1.5">
         {locked ? (
@@ -422,6 +408,11 @@ function StockRow({
           aria-label="Quantité en stock"
         />
       </td>
+      <td className="px-3 py-2 tabular-nums text-muted-foreground">
+        {surface > 0
+          ? `${surface.toLocaleString("fr-FR", { maximumFractionDigits: 2, minimumFractionDigits: 2 })} m²`
+          : "—"}
+      </td>
       <td className="px-2 py-1.5">
         <Input
           className="tabular-nums"
@@ -436,15 +427,21 @@ function StockRow({
       </td>
       <td className="px-2 py-1.5">
         <Input
-          className="tabular-nums"
-          inputMode="decimal"
-          value={String(item.unitCost)}
-          onChange={(e) => {
-            const n = Number(e.target.value.replace(",", "."));
-            onPatch({ unitCost: Number.isFinite(n) ? n : 0 });
-          }}
-          aria-label="Coût unitaire"
+          value={item.notes ?? ""}
+          onChange={(e) => onPatch({ notes: e.target.value })}
+          aria-label="Notes"
+          placeholder="Notes"
         />
+      </td>
+      <td className="px-3 py-2 text-xs text-muted-foreground">
+        {item.updatedAt
+          ? new Date(item.updatedAt).toLocaleString("fr-FR", {
+              day: "2-digit",
+              month: "short",
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : "—"}
       </td>
       <td className="px-3 py-1.5">
         <StatusBadge item={item} />

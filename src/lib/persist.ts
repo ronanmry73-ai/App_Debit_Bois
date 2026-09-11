@@ -1,12 +1,18 @@
 /**
  * Persistance locale : localStorage + fichier Electron (userData) si présent.
- * Les deux se recouvrent : le fichier Electron est la source de vérité desktop.
+ * Catalogue, stocks et projets partagent le même fichier / la même clé.
  */
 
 import { migrateCatalog, seedCatalog, type Catalog } from "./catalog.ts";
 import { desktopApi } from "./desktop.ts";
 import { snapshotProject, type Project } from "./projects.ts";
-import { exampleStock, type StockItem, type StockMove } from "./stock.ts";
+import {
+  exampleStock,
+  migrateStockItems,
+  type StockDeduction,
+  type StockItem,
+  type StockMove,
+} from "./stock.ts";
 import type { AppSettings, PieceRow } from "./types.ts";
 
 export const STORAGE_KEY = "debit-bois-v5";
@@ -31,6 +37,7 @@ export type PersistedState = {
   projectMeta: ProjectMeta;
   selectedStrategy: string;
   usedRefIds: string[];
+  stockDeduction: StockDeduction | null;
 };
 
 export function emptyMeta(): ProjectMeta {
@@ -70,6 +77,7 @@ export function migrateState(
     projectMeta: emptyMeta(),
     selectedStrategy: "mixed",
     usedRefIds: [],
+    stockDeduction: null,
   };
   if (!raw || typeof raw !== "object") return base;
   const o = raw as Record<string, unknown>;
@@ -80,10 +88,7 @@ export function migrateState(
     Array.isArray(o.rows) && o.rows.length > 0
       ? (o.rows as PieceRow[])
       : base.rows;
-  const stock =
-    Array.isArray(o.stock) && o.stock.length > 0
-      ? (o.stock as StockItem[])
-      : base.stock;
+  const stock = migrateStockItems(o.stock);
   const moves = Array.isArray(o.moves) ? (o.moves as StockMove[]) : [];
   const catalog = migrateCatalog(o.catalog);
   let projects = Array.isArray(o.projects) ? (o.projects as Project[]) : [];
@@ -102,6 +107,10 @@ export function migrateState(
   const usedRefIds = Array.isArray(o.usedRefIds)
     ? (o.usedRefIds as string[])
     : [];
+  const stockDeduction =
+    o.stockDeduction && typeof o.stockDeduction === "object"
+      ? (o.stockDeduction as StockDeduction)
+      : null;
 
   const isV5 = o.version === 5;
   if (!isV5 && projects.length === 0 && rowsHaveWork(rows)) {
@@ -112,8 +121,6 @@ export function migrateState(
       notes: projectMeta.notes,
       rows,
       settings,
-      stock,
-      moves,
       selectedStrategy:
         typeof o.selectedStrategy === "string" ? o.selectedStrategy : "mixed",
       usedRefIds: usedRefIds.length > 0 ? usedRefIds : ["A", "B"],
@@ -137,6 +144,7 @@ export function migrateState(
     selectedStrategy:
       typeof o.selectedStrategy === "string" ? o.selectedStrategy : "mixed",
     usedRefIds,
+    stockDeduction,
   };
 }
 

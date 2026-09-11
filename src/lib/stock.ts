@@ -1,16 +1,13 @@
 /**
- * Stocks atelier : panneaux 400/600 et quincaillerie.
- * Persisté en localStorage, rapproché du calepinage et du devis.
- *
- * Exemple (stock d’exemple + devis 2×A, 4 charnières, 2 poignées) :
- *   besoin 2 / stock 10 → couvert, à commander 0
- *   déduction chantier → A 10→8, charnières 16→12
- *   si besoin B = 99 et stock B = 6 → manque 93, à commander
+ * Stocks atelier : global, indépendant des projets.
+ * Persisté en localStorage / fichier Electron, rapproché du calepinage.
  */
 
 import type { HardwareItem } from "./types.ts";
-import type { Catalog, PanelRef } from "./catalog.ts";
+import type { Catalog, PanelRef, PanelSpec } from "./catalog.ts";
+import { familyById } from "./catalog.ts";
 import { hardwareLines, parseAmount } from "./pricing.ts";
+import { panelAreaM2 } from "./supplier.ts";
 import { newId } from "./utils.ts";
 
 export const PANEL_A_ID = "stock-panel-A";
@@ -27,6 +24,12 @@ export type StockItem = {
   unit: string;
   unitCost: number;
   minQty: number;
+  refId?: string;
+  familyId?: string;
+  length?: number;
+  width?: number;
+  notes?: string;
+  updatedAt?: string;
 };
 
 export type StockMoveType = "in" | "out" | "adjust";
@@ -39,6 +42,8 @@ export type StockMove = {
   qty: number;
   note: string;
   quoteNumber: string;
+  projectId?: string;
+  projectName?: string;
 };
 
 export type JobNeed = {
@@ -55,9 +60,47 @@ export type NeedLine = {
   needed: number;
   onHand: number;
   gap: number;
+  specId?: string;
+  familyName?: string;
+  areaM2?: number;
 };
 
 export type StockStatus = "ok" | "low" | "empty";
+
+export type DeductionPlanLine = {
+  itemId: string | null;
+  specId?: string;
+  familyName: string;
+  name: string;
+  needed: number;
+  onHand: number;
+  afterFull: number;
+  afterPartial: number;
+  gap: number;
+  areaM2: number;
+  kind: "panel" | "hardware";
+};
+
+export type StockDeductionLine = {
+  itemId: string;
+  specId?: string;
+  familyName?: string;
+  name: string;
+  qty: number;
+  areaM2: number;
+  before: number;
+  after: number;
+};
+
+export type StockDeduction = {
+  id: string;
+  date: string;
+  quoteNumber: string;
+  projectId: string;
+  projectName: string;
+  partial: boolean;
+  lines: StockDeductionLine[];
+};
 
 export function normalizeName(s: string): string {
   return s
@@ -78,6 +121,13 @@ export function stockValue(items: StockItem[]): number {
   return items.reduce((s, it) => s + Math.max(0, it.qty) * Math.max(0, it.unitCost), 0);
 }
 
+export function stockSurfaceM2(item: StockItem): number {
+  if (item.length && item.width) {
+    return panelAreaM2(item.length, item.width, item.qty);
+  }
+  return 0;
+}
+
 export function findPanel(items: StockItem[], format: "A" | "B"): StockItem | undefined {
   const id = format === "A" ? PANEL_A_ID : PANEL_B_ID;
   return items.find((it) => it.id === id || it.kind === (format === "A" ? "panel-A" : "panel-B"));
@@ -87,6 +137,15 @@ export function findByName(items: StockItem[], name: string): StockItem | undefi
   const n = normalizeName(name);
   if (!n) return undefined;
   return items.find((it) => normalizeName(it.name) === n);
+}
+
+export function findStockForSpec(items: StockItem[], specId: string): StockItem | undefined {
+  if (specId === "A") return findPanel(items, "A");
+  if (specId === "B") return findPanel(items, "B");
+  return (
+    items.find((it) => it.id === specId || it.refId === specId) ??
+    items.find((it) => it.id === stockIdForSpecId(specId))
+  );
 }
 
 export function jobNeedFromQuote(
@@ -129,11 +188,17 @@ export function jobNeedFromQuote(
   };
 }
 
-export function coverage(items: StockItem[], need: JobNeed): NeedLine[] {
+export function coverage(
+  items: StockItem[],
+  need: JobNeed,
+  specs: PanelSpec[] = [],
+  catalog?: Catalog,
+): NeedLine[] {
   const lines: NeedLine[] = [];
   const a = findPanel(items, "A");
   const b = findPanel(items, "B");
   if (need.panelsA > 0 || a) {
+    const spec = specs.find((s) => s.id === "A");
     lines.push({
       key: "panel-A",
       itemId: a?.id ?? null,
@@ -141,9 +206,13 @@ export function coverage(items: StockItem[], need: JobNeed): NeedLine[] {
       needed: need.panelsA,
       onHand: a?.qty ?? 0,
       gap: Math.max(0, need.panelsA - (a?.qty ?? 0)),
+      specId: "A",
+      familyName: spec?.familyName ?? familyLabel(catalog, a?.familyId),
+      areaM2: panelAreaM2(spec?.length ?? a?.length ?? 2500, spec?.width ?? a?.width ?? 400, need.panelsA),
     });
   }
   if (need.panelsB > 0 || b) {
+    const spec = specs.find((s) => s.id === "B");
     lines.push({
       key: "panel-B",
       itemId: b?.id ?? null,
@@ -151,12 +220,15 @@ export function coverage(items: StockItem[], need: JobNeed): NeedLine[] {
       needed: need.panelsB,
       onHand: b?.qty ?? 0,
       gap: Math.max(0, need.panelsB - (b?.qty ?? 0)),
+      specId: "B",
+      familyName: spec?.familyName ?? familyLabel(catalog, b?.familyId),
+      areaM2: panelAreaM2(spec?.length ?? b?.length ?? 2500, spec?.width ?? b?.width ?? 600, need.panelsB),
     });
   }
   for (const p of need.panels ?? []) {
     if (p.specId === "A" || p.specId === "B") continue;
-    const found =
-      items.find((it) => it.id === p.specId) ?? findByName(items, p.name);
+    const found = findStockForSpec(items, p.specId) ?? findByName(items, p.name);
+    const spec = specs.find((s) => s.id === p.specId);
     lines.push({
       key: `panel-${p.specId}`,
       itemId: found?.id ?? null,
@@ -164,6 +236,9 @@ export function coverage(items: StockItem[], need: JobNeed): NeedLine[] {
       needed: p.qty,
       onHand: found?.qty ?? 0,
       gap: Math.max(0, p.qty - (found?.qty ?? 0)),
+      specId: p.specId,
+      familyName: spec?.familyName ?? familyLabel(catalog, found?.familyId),
+      areaM2: panelAreaM2(spec?.length ?? found?.length ?? 0, spec?.width ?? found?.width ?? 0, p.qty),
     });
   }
   for (const h of need.hardware) {
@@ -175,9 +250,16 @@ export function coverage(items: StockItem[], need: JobNeed): NeedLine[] {
       needed: h.qty,
       onHand: found?.qty ?? 0,
       gap: Math.max(0, h.qty - (found?.qty ?? 0)),
+      familyName: "",
+      areaM2: 0,
     });
   }
   return lines;
+}
+
+function familyLabel(catalog: Catalog | undefined, familyId?: string): string {
+  if (!catalog || !familyId) return "";
+  return familyById(catalog, familyId)?.name ?? "";
 }
 
 export function hasShortage(lines: NeedLine[]): boolean {
@@ -191,6 +273,29 @@ export function toOrder(lines: NeedLine[]): { name: string; qty: number }[] {
     .map((l) => ({ name: l.name, qty: l.gap }));
 }
 
+export function planDeduction(
+  items: StockItem[],
+  need: JobNeed,
+  specs: PanelSpec[] = [],
+  catalog?: Catalog,
+): DeductionPlanLine[] {
+  return coverage(items, need, specs, catalog)
+    .filter((l) => l.needed > 0)
+    .map((l) => ({
+      itemId: l.itemId,
+      specId: l.specId,
+      familyName: l.familyName ?? "",
+      name: l.name,
+      needed: l.needed,
+      onHand: l.onHand,
+      afterFull: Math.max(0, l.onHand - l.needed),
+      afterPartial: Math.max(0, l.onHand - Math.min(l.needed, l.onHand)),
+      gap: l.gap,
+      areaM2: l.areaM2 ?? 0,
+      kind: l.specId ? "panel" : "hardware",
+    }));
+}
+
 export function emptyStockItem(): StockItem {
   return {
     id: newId(),
@@ -201,6 +306,8 @@ export function emptyStockItem(): StockItem {
     unit: "pièce",
     unitCost: 0,
     minQty: 0,
+    notes: "",
+    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -209,8 +316,11 @@ export function applyDelta(
   itemId: string,
   delta: number,
 ): StockItem[] {
+  const t = new Date().toISOString();
   return items.map((it) =>
-    it.id === itemId ? { ...it, qty: Math.max(0, roundQty(it.qty + delta)) } : it,
+    it.id === itemId
+      ? { ...it, qty: Math.max(0, roundQty(it.qty + delta)), updatedAt: t }
+      : it,
   );
 }
 
@@ -221,6 +331,7 @@ export function recordMove(
   qty: number,
   note: string,
   quoteNumber = "",
+  meta?: { projectId?: string; projectName?: string },
 ): StockMove[] {
   const move: StockMove = {
     id: newId(),
@@ -230,8 +341,10 @@ export function recordMove(
     qty: roundQty(qty),
     note,
     quoteNumber,
+    projectId: meta?.projectId,
+    projectName: meta?.projectName,
   };
-  return [move, ...moves].slice(0, 80);
+  return [move, ...moves].slice(0, 120);
 }
 
 export function consumeForJob(
@@ -240,28 +353,116 @@ export function consumeForJob(
   need: JobNeed,
   quoteNumber: string,
   partial: boolean,
-): { items: StockItem[]; moves: StockMove[]; ok: boolean; lines: NeedLine[] } {
-  const lines = coverage(items, need).filter((l) => l.needed > 0);
+  ctx?: {
+    projectId?: string;
+    projectName?: string;
+    specs?: PanelSpec[];
+    catalog?: Catalog;
+  },
+): {
+  items: StockItem[];
+  moves: StockMove[];
+  ok: boolean;
+  lines: NeedLine[];
+  deduction?: StockDeduction;
+} {
+  const lines = coverage(items, need, ctx?.specs, ctx?.catalog).filter((l) => l.needed > 0);
   if (!partial && hasShortage(lines)) {
     return { items, moves, ok: false, lines };
   }
   let nextItems = items;
   let nextMoves = moves;
+  const taken: StockDeductionLine[] = [];
+  const meta = {
+    projectId: ctx?.projectId,
+    projectName: ctx?.projectName,
+  };
   for (const line of lines) {
     if (!line.itemId) continue;
-    const take = partial ? Math.min(line.needed, line.onHand) : line.needed;
+    const current = nextItems.find((it) => it.id === line.itemId);
+    const before = current?.qty ?? 0;
+    const take = partial ? Math.min(line.needed, before) : line.needed;
     if (take <= 0) continue;
     nextItems = applyDelta(nextItems, line.itemId, -take);
+    const after = nextItems.find((it) => it.id === line.itemId)?.qty ?? 0;
     nextMoves = recordMove(
       nextMoves,
       line.itemId,
       "out",
       take,
-      `Chantier ${quoteNumber || "sans n°"}`.trim(),
+      `Chantier ${quoteNumber || ctx?.projectName || "sans n°"}`.trim(),
       quoteNumber,
+      meta,
+    );
+    taken.push({
+      itemId: line.itemId,
+      specId: line.specId,
+      familyName: line.familyName,
+      name: line.name,
+      qty: take,
+      areaM2: line.areaM2 ? (line.areaM2 * take) / line.needed : 0,
+      before,
+      after,
+    });
+  }
+  const deduction: StockDeduction | undefined =
+    taken.length > 0
+      ? {
+          id: newId(),
+          date: new Date().toISOString(),
+          quoteNumber,
+          projectId: ctx?.projectId ?? "",
+          projectName: ctx?.projectName ?? "",
+          partial,
+          lines: taken,
+        }
+      : undefined;
+  return {
+    items: nextItems,
+    moves: nextMoves,
+    ok: true,
+    lines: coverage(nextItems, need, ctx?.specs, ctx?.catalog),
+    deduction,
+  };
+}
+
+export function restoreDeduction(
+  items: StockItem[],
+  moves: StockMove[],
+  deduction: StockDeduction,
+): { items: StockItem[]; moves: StockMove[]; ok: boolean; error?: string } {
+  if (!deduction?.lines?.length) {
+    return { items, moves, ok: false, error: "Aucune déduction à annuler." };
+  }
+  let nextItems = items;
+  let nextMoves = moves;
+  for (const line of deduction.lines) {
+    if (!line.itemId || line.qty <= 0) continue;
+    if (!nextItems.some((it) => it.id === line.itemId)) {
+      nextItems = [
+        ...nextItems,
+        {
+          ...emptyStockItem(),
+          id: line.itemId,
+          name: line.name,
+          qty: 0,
+          kind: line.specId === "A" ? "panel-A" : line.specId === "B" ? "panel-B" : "other",
+          refId: line.specId,
+        },
+      ];
+    }
+    nextItems = applyDelta(nextItems, line.itemId, line.qty);
+    nextMoves = recordMove(
+      nextMoves,
+      line.itemId,
+      "in",
+      line.qty,
+      `Annulation déduction ${deduction.quoteNumber || deduction.projectName || ""}`.trim(),
+      deduction.quoteNumber,
+      { projectId: deduction.projectId, projectName: deduction.projectName },
     );
   }
-  return { items: nextItems, moves: nextMoves, ok: true, lines: coverage(nextItems, need) };
+  return { items: nextItems, moves: nextMoves, ok: true };
 }
 
 export function ensureStockArticle(
@@ -286,6 +487,7 @@ export function ensureStockArticle(
 }
 
 export function exampleStock(): StockItem[] {
+  const t = "2024-01-01T00:00:00.000Z";
   return [
     {
       id: PANEL_A_ID,
@@ -296,6 +498,12 @@ export function exampleStock(): StockItem[] {
       unit: "pièce",
       unitCost: 40,
       minQty: 4,
+      refId: "A",
+      familyId: "fam-standard",
+      length: 2500,
+      width: 400,
+      notes: "",
+      updatedAt: t,
     },
     {
       id: PANEL_B_ID,
@@ -306,6 +514,12 @@ export function exampleStock(): StockItem[] {
       unit: "pièce",
       unitCost: 60,
       minQty: 2,
+      refId: "B",
+      familyId: "fam-standard",
+      length: 2500,
+      width: 600,
+      notes: "",
+      updatedAt: t,
     },
     {
       id: "stock-hw-1",
@@ -316,6 +530,8 @@ export function exampleStock(): StockItem[] {
       unit: "pièce",
       unitCost: 4.5,
       minQty: 8,
+      notes: "",
+      updatedAt: t,
     },
     {
       id: "stock-hw-2",
@@ -326,6 +542,8 @@ export function exampleStock(): StockItem[] {
       unit: "pièce",
       unitCost: 6,
       minQty: 4,
+      notes: "",
+      updatedAt: t,
     },
     {
       id: "stock-hw-3",
@@ -336,6 +554,8 @@ export function exampleStock(): StockItem[] {
       unit: "pièce",
       unitCost: 0.04,
       minQty: 100,
+      notes: "",
+      updatedAt: t,
     },
   ];
 }
@@ -354,9 +574,13 @@ export function ensurePanelRows(items: StockItem[]): StockItem[] {
 }
 
 export function stockIdForRef(ref: PanelRef): string {
-  if (ref.id === "A") return PANEL_A_ID;
-  if (ref.id === "B") return PANEL_B_ID;
-  return ref.id;
+  return stockIdForSpecId(ref.id);
+}
+
+export function stockIdForSpecId(specId: string): string {
+  if (specId === "A") return PANEL_A_ID;
+  if (specId === "B") return PANEL_B_ID;
+  return specId;
 }
 
 export function syncStockWithCatalog(
@@ -366,7 +590,22 @@ export function syncStockWithCatalog(
   let next = ensurePanelRows(items);
   for (const ref of catalog.refs) {
     const id = stockIdForRef(ref);
-    if (next.some((it) => it.id === id)) continue;
+    const existing = next.find((it) => it.id === id || it.refId === ref.id);
+    if (existing) {
+      next = next.map((it) =>
+        it.id === existing.id
+          ? {
+              ...it,
+              refId: ref.id,
+              familyId: ref.familyId,
+              length: ref.length,
+              width: ref.width,
+              sku: it.sku || ref.name,
+            }
+          : it,
+      );
+      continue;
+    }
     next = [
       ...next,
       {
@@ -378,10 +617,25 @@ export function syncStockWithCatalog(
         unit: "pièce",
         unitCost: 0,
         minQty: 0,
+        refId: ref.id,
+        familyId: ref.familyId,
+        length: ref.length,
+        width: ref.width,
+        notes: "",
+        updatedAt: new Date().toISOString(),
       },
     ];
   }
   return next;
+}
+
+export function migrateStockItems(raw: unknown): StockItem[] {
+  if (!Array.isArray(raw) || raw.length === 0) return exampleStock();
+  return (raw as StockItem[]).map((it) => ({
+    ...it,
+    notes: it.notes ?? "",
+    updatedAt: it.updatedAt ?? "",
+  }));
 }
 
 function roundQty(n: number): number {

@@ -1,9 +1,11 @@
 /**
  * Projets enregistrés localement : tout ce qu’il faut pour rouvrir et recalculer.
+ * Le stock atelier et le catalogue sont globaux : on n’y copie plus le stock.
  */
 
 import type { Catalog } from "./catalog.ts";
-import type { StockItem, StockMove } from "./stock.ts";
+import type { StockDeduction } from "./stock.ts";
+import type { SupplierCost } from "./supplier.ts";
 import type { AppSettings, PieceRow } from "./types.ts";
 import { newId } from "./utils.ts";
 
@@ -19,10 +21,13 @@ export type Project = {
   updatedAt: string;
   rows: PieceRow[];
   settings: AppSettings;
-  stock: StockItem[];
-  moves: StockMove[];
+  /** Conservé pour les anciens fichiers, ignoré à l’ouverture. */
+  stock?: unknown;
+  moves?: unknown;
   selectedStrategy: string;
   usedRefIds: string[];
+  supplierSnapshot?: SupplierCost | null;
+  stockDeduction?: StockDeduction | null;
 };
 
 export type ProjectSummary = {
@@ -49,10 +54,10 @@ export function snapshotProject(input: {
   notes: string;
   rows: PieceRow[];
   settings: AppSettings;
-  stock: StockItem[];
-  moves: StockMove[];
   selectedStrategy: string;
   usedRefIds: string[];
+  supplierSnapshot?: SupplierCost | null;
+  stockDeduction?: StockDeduction | null;
 }): Project {
   const t = new Date().toISOString();
   return {
@@ -65,21 +70,23 @@ export function snapshotProject(input: {
     updatedAt: t,
     rows: input.rows,
     settings: input.settings,
-    stock: input.stock,
-    moves: input.moves,
     selectedStrategy: input.selectedStrategy,
     usedRefIds: input.usedRefIds,
+    supplierSnapshot: input.supplierSnapshot ?? null,
+    stockDeduction: input.stockDeduction ?? null,
   };
 }
 
 export function duplicateProject(project: Project, name?: string): Project {
   const t = new Date().toISOString();
+  const copy = structuredClone(project);
   return {
-    ...structuredClone(project),
+    ...copy,
     id: newId(),
     name: name?.trim() || `${project.name} (copie)`,
     createdAt: t,
     updatedAt: t,
+    stockDeduction: null,
   };
 }
 

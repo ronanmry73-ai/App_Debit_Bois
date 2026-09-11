@@ -7,6 +7,7 @@ import {
   exampleStock,
   hasShortage,
   jobNeedFromQuote,
+  restoreDeduction,
   stockStatus,
   stockValue,
   toOrder,
@@ -75,4 +76,22 @@ test("créer un article hors stock sans doublon", () => {
   assert.equal(added.length, start.length + 1);
   assert.equal(added.at(-1)?.qty, 0);
   assert.equal(added.at(-1)?.name, "Tiroirs métalliques");
+});
+
+test("déduction enregistre l’historique et l’annulation restaure le stock", () => {
+  const start = exampleStock();
+  const need = jobNeedFromQuote({ A: 2, B: 0 }, []);
+  const out = consumeForJob(start, [], need, "DEVIS-1", false, {
+    projectId: "p1",
+    projectName: "Étagère salon",
+  });
+  assert.equal(out.ok, true);
+  assert.ok(out.deduction);
+  assert.equal(out.items.find((i) => i.id === "stock-panel-A")?.qty, 8);
+  const twice = consumeForJob(out.items, out.moves, need, "DEVIS-1", false);
+  assert.equal(twice.ok, true);
+  assert.equal(twice.items.find((i) => i.id === "stock-panel-A")?.qty, 6);
+  const back = restoreDeduction(out.items, out.moves, out.deduction!);
+  assert.equal(back.ok, true);
+  assert.equal(back.items.find((i) => i.id === "stock-panel-A")?.qty, 10);
 });

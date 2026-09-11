@@ -6,9 +6,12 @@ import {
   deleteFamily,
   deleteRef,
   mergeCatalog,
+  migrateCatalog,
   packingSpecs,
+  parsePriceInput,
   seedCatalog,
   setRefActive,
+  updateRef,
   usableRefs,
 } from "./catalog.ts";
 
@@ -85,4 +88,29 @@ test("fusion de catalogue importé sans écraser", () => {
     again.refs.filter((r) => r.length === 3000 && r.width === 600).length,
     1,
   );
+});
+
+test("prix au m² : ajout, modification, conservation à la désactivation", () => {
+  let c = seedCatalog();
+  const priced = updateRef(c, "A", { pricePerM2: "18,50" });
+  assert.equal(priced.error, undefined);
+  c = priced.catalog;
+  assert.equal(c.refs.find((r) => r.id === "A")?.pricePerM2, 18.5);
+  const bad = updateRef(c, "A", { pricePerM2: "-4" });
+  assert.ok(bad.error);
+  c = setRefActive(c, "A", false);
+  assert.equal(c.refs.find((r) => r.id === "A")?.pricePerM2, 18.5);
+  assert.equal(usableRefs(c).some((r) => r.id === "A"), false);
+});
+
+test("migration conserve un prix existant et complète les refs sans prix", () => {
+  const migrated = migrateCatalog({
+    families: [{ id: "fam-standard", name: "Standard", active: true, createdAt: "", updatedAt: "" }],
+    refs: [
+      { id: "A", familyId: "fam-standard", name: "P-400", length: 2500, width: 400, pricePerM2: 22, active: true },
+    ],
+  });
+  assert.equal(migrated.refs.find((r) => r.id === "A")?.pricePerM2, 22);
+  assert.equal(migrated.refs.find((r) => r.id === "B")?.pricePerM2, null);
+  assert.equal(parsePriceInput("").ok, true);
 });

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { emptyRow, defaultQuoteIdentity } from "./presets.ts";
-import { exampleStock } from "./stock.ts";
 import {
   duplicateProject,
   findProjectByName,
@@ -46,10 +45,48 @@ function sampleProject() {
       emptyRow(),
     ],
     settings: sampleSettings(),
-    stock: exampleStock(),
-    moves: [],
     selectedStrategy: "mixed",
     usedRefIds: ["A", "B"],
+    supplierSnapshot: {
+      lines: [
+        {
+          specId: "A",
+          familyId: "fam-standard",
+          familyName: "Standard",
+          name: "P-400",
+          length: 2500,
+          width: 400,
+          qty: 4,
+          areaM2: 4,
+          pricePerM2: 20,
+          cost: 80,
+        },
+      ],
+      totalAreaM2: 4,
+      weightedPricePerM2: 20,
+      totalCost: 80,
+      missing: [],
+      calculatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    stockDeduction: {
+      id: "ded-1",
+      date: "2026-01-02T00:00:00.000Z",
+      quoteNumber: "DEVIS-1",
+      projectId: "x",
+      projectName: "Étagère salon",
+      partial: false,
+      lines: [
+        {
+          itemId: "stock-panel-A",
+          specId: "A",
+          name: "Panneau 2500 × 400 mm",
+          qty: 2,
+          areaM2: 2,
+          before: 10,
+          after: 8,
+        },
+      ],
+    },
   });
 }
 
@@ -63,6 +100,8 @@ test("export / import JSON reconstitue le projet", () => {
   assert.equal(parsed.project.clientName, "Martin");
   assert.equal(parsed.project.rows[0]?.familyId, "fam-tilly");
   assert.deepEqual(parsed.project.usedRefIds, ["A", "B"]);
+  assert.equal(parsed.project.supplierSnapshot?.weightedPricePerM2, 20);
+  assert.equal(parsed.project.stockDeduction?.id, "ded-1");
 });
 
 test("fichier invalide → message clair", () => {
@@ -74,12 +113,14 @@ test("fichier invalide → message clair", () => {
   assert.equal(other.ok, false);
 });
 
-test("dupliquer change l’id et le nom, pas les pièces", () => {
+test("dupliquer change l’id et le nom, pas les pièces, et n’emporte pas la déduction", () => {
   const p = sampleProject();
   const copy = duplicateProject(p);
   assert.notEqual(copy.id, p.id);
   assert.match(copy.name, /copie/);
   assert.equal(copy.rows[0]?.name, "Côté gauche");
+  assert.equal(copy.stockDeduction, null);
+  assert.equal(copy.supplierSnapshot?.weightedPricePerM2, 20);
 });
 
 test("nom d’import unique si collision", () => {
@@ -87,4 +128,21 @@ test("nom d’import unique si collision", () => {
   const name = uniqueImportedName([p], "Étagère salon");
   assert.equal(name, "Étagère salon (2)");
   assert.ok(findProjectByName([p], "Étagère salon"));
+});
+
+test("snapshot n’embarque pas le stock atelier", () => {
+  const p = snapshotProject({
+    name: "Test",
+    description: "",
+    clientName: "",
+    notes: "",
+    rows: [emptyRow()],
+    settings: sampleSettings(),
+    selectedStrategy: "mixed",
+    usedRefIds: ["A"],
+  });
+  assert.equal(p.stock, undefined);
+  assert.equal(p.moves, undefined);
+  assert.equal(p.supplierSnapshot, null);
+  assert.equal(p.stockDeduction, null);
 });

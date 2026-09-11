@@ -21,6 +21,8 @@ import { StockPanel } from "@/components/stock-panel";
 import { CatalogPanel } from "@/components/catalog-panel";
 import { ProjectsBar } from "@/components/projects-bar";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { JobNeedPanel } from "@/components/job-need-panel";
+import { SupplierCostPanel } from "@/components/supplier-cost-panel";
 import {
   optimizeCutting,
   type OptimizeOutput,
@@ -33,6 +35,7 @@ import {
   exampleStock,
   jobNeedFromQuote,
   syncStockWithCatalog,
+  type StockDeduction,
   type StockItem,
   type StockMove,
 } from "@/lib/stock";
@@ -66,6 +69,7 @@ import {
   type ProjectMeta,
 } from "@/lib/persist";
 import type { AppSettings, PieceRow } from "@/lib/types";
+import { supplierCostFromCounts } from "@/lib/supplier";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -82,6 +86,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   hourlyRate: 45,
   hardwareItems: [{ id: "hw-empty-1", name: "", qty: "1", unitPrice: "" }],
 };
+
+type AppTab = "projet" | "catalogue" | "stocks";
 
 type DialogState =
   | { kind: "none" }
@@ -117,8 +123,6 @@ function parseRows(rows: PieceRow[], catalog: Catalog): PieceDef[] {
 function fpOf(input: {
   rows: PieceRow[];
   settings: AppSettings;
-  stock: StockItem[];
-  moves: StockMove[];
   selected: string;
   meta: ProjectMeta;
 }): string {
@@ -153,14 +157,16 @@ function Home() {
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [projectMeta, setProjectMeta] = useState<ProjectMeta>(emptyMeta);
   const [usedRefIds, setUsedRefIds] = useState<string[]>([]);
+  const [stockDeduction, setStockDeduction] = useState<StockDeduction | null>(null);
   const [savedFp, setSavedFp] = useState("");
   const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
   const [promptValue, setPromptValue] = useState("");
+  const [tab, setTab] = useState<AppTab>("projet");
   const skipNextPack = useRef(false);
 
   const liveFp = useMemo(
-    () => fpOf({ rows, settings, stock, moves, selected, meta: projectMeta }),
-    [rows, settings, stock, moves, selected, projectMeta],
+    () => fpOf({ rows, settings, selected, meta: projectMeta }),
+    [rows, settings, selected, projectMeta],
   );
   const dirty = hydrated && liveFp !== savedFp;
 
@@ -193,13 +199,12 @@ function Home() {
         setUsedRefIds(saved.usedRefIds);
         setSelected(saved.selectedStrategy || "mixed");
         const named = saved.projects.find((p) => p.id === saved.currentProjectId);
+        setStockDeduction(named?.stockDeduction ?? saved.stockDeduction ?? null);
         setSavedFp(
           named
             ? fpOf({
                 rows: named.rows,
                 settings: named.settings,
-                stock: named.stock,
-                moves: named.moves,
                 selected: named.selectedStrategy,
                 meta: {
                   name: named.name,
@@ -211,8 +216,6 @@ function Home() {
             : fpOf({
                 rows: saved.rows,
                 settings: { ...DEFAULT_SETTINGS, ...saved.settings },
-                stock: stockSynced,
-                moves: saved.moves,
                 selected: saved.selectedStrategy || "mixed",
                 meta: saved.projectMeta,
               }),
@@ -240,6 +243,7 @@ function Home() {
         projectMeta,
         selectedStrategy: selected,
         usedRefIds,
+        stockDeduction,
       });
     }, 280);
     return () => clearTimeout(t);
@@ -255,6 +259,7 @@ function Home() {
     projectMeta,
     selected,
     usedRefIds,
+    stockDeduction,
   ]);
 
   useEffect(() => {
@@ -398,6 +403,14 @@ function Home() {
     ? jobNeedFromQuote(current.counts, settings.hardwareItems, specLabels)
     : null;
 
+  const liveSupplier = useMemo(
+    () =>
+      current
+        ? supplierCostFromCounts(current.counts, specs)
+        : null,
+    [current, specs],
+  );
+
   function guardUnsaved(next: () => void) {
     if (!dirty) {
       next();
@@ -417,10 +430,10 @@ function Home() {
       notes: projectMeta.notes,
       rows,
       settings: { ...settings, clientName },
-      stock,
-      moves,
       selectedStrategy: selected,
       usedRefIds: [...new Set([...usedRefIds, ...usedFromOutput(result)])],
+      supplierSnapshot: liveSupplier,
+      stockDeduction,
     });
   }
 
@@ -437,8 +450,6 @@ function Home() {
       fpOf({
         rows: p.rows,
         settings: p.settings,
-        stock: p.stock,
-        moves: p.moves,
         selected: p.selectedStrategy,
         meta: {
           name: p.name,
@@ -512,12 +523,11 @@ function Home() {
     setUsedRefIds([]);
     setSelected("mixed");
     setSettings(nextSettings);
+    setStockDeduction(null);
     setSavedFp(
       fpOf({
         rows: nextRows,
         settings: nextSettings,
-        stock,
-        moves,
         selected: "mixed",
         meta: nextMeta,
       }),
@@ -528,12 +538,12 @@ function Home() {
     skipNextPack.current = true;
     setRows(p.rows.length > 0 ? p.rows : [emptyRow()]);
     setSettings({ ...DEFAULT_SETTINGS, ...p.settings });
-    setStock(syncStockWithCatalog(p.stock?.length ? p.stock : exampleStock(), catalog));
-    setMoves(p.moves ?? []);
     setSelected(p.selectedStrategy || "mixed");
+    setStockDeduction(p.stockDeduction ?? null);
     rememberSaved(p);
     setError(null);
     setFlash(`Projet « ${p.name} » ouvert.`);
+    setTab("projet");
   }
 
   function applyImported(project: Project, incomingCatalog?: Catalog, rename?: string) {
@@ -611,47 +621,33 @@ function Home() {
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
-              variant="outline"
-              onClick={() =>
-                document.getElementById("projets")?.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
-                })
-              }
+              variant={tab === "projet" ? "default" : "outline"}
+              onClick={() => setTab("projet")}
             >
               <FolderOpen />
-              Projets
+              Projet
             </Button>
             <Button
               type="button"
-              variant="outline"
-              onClick={() =>
-                document.getElementById("catalogue")?.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
-                })
-              }
+              variant={tab === "catalogue" ? "default" : "outline"}
+              onClick={() => setTab("catalogue")}
             >
               <Layers />
-              Panneaux
+              Familles et références
             </Button>
             <Button
               type="button"
-              variant="outline"
-              onClick={() =>
-                document.getElementById("stocks")?.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
-                })
-              }
+              variant={tab === "stocks" ? "default" : "outline"}
+              onClick={() => setTab("stocks")}
             >
               <Package />
-              Stocks
+              Stocks atelier
             </Button>
             <Button
               type="button"
               variant="outline"
               onClick={() => {
+                setTab("projet");
                 generateQuote();
                 window.print();
               }}
@@ -662,7 +658,10 @@ function Home() {
             </Button>
             <Button
               type="button"
-              onClick={generateQuote}
+              onClick={() => {
+                setTab("projet");
+                generateQuote();
+              }}
               disabled={!result || !selling.ok}
             >
               <FileText />
@@ -688,6 +687,31 @@ function Home() {
           </div>
         )}
 
+        {tab === "catalogue" && (
+          <CatalogPanel
+            catalog={catalog}
+            usedRefIds={blockedRefIds}
+            onChange={(next, err) => {
+              setCatalog(next);
+              setStock((prev) => syncStockWithCatalog(prev, next));
+              if (err) setError(err);
+              else setError(null);
+            }}
+          />
+        )}
+
+        {tab === "stocks" && (
+          <StockPanel
+            items={stock}
+            moves={moves}
+            onItems={setStock}
+            onMoves={setMoves}
+            catalog={catalog}
+          />
+        )}
+
+        {tab === "projet" && (
+          <>
         <ProjectsBar
           meta={projectMeta}
           onMeta={(patch) => setProjectMeta((m) => ({ ...m, ...patch }))}
@@ -728,17 +752,6 @@ function Home() {
           }}
           onImport={() => {
             void handleImport();
-          }}
-        />
-
-        <CatalogPanel
-          catalog={catalog}
-          usedRefIds={blockedRefIds}
-          onChange={(next, err) => {
-            setCatalog(next);
-            setStock((prev) => syncStockWithCatalog(prev, next));
-            if (err) setError(err);
-            else setError(null);
           }}
         />
 
@@ -807,14 +820,54 @@ function Home() {
           </div>
         )}
 
-        <StockPanel
-          items={stock}
-          moves={moves}
-          onItems={setStock}
-          onMoves={setMoves}
-          need={jobNeed}
-          quoteNumber={settings.quoteNumber}
-        />
+        {result && current && (
+          <SupplierCostPanel
+            live={liveSupplier}
+            snapshot={
+              projects.find((p) => p.id === currentProjectId)?.supplierSnapshot ??
+              null
+            }
+            onApplyToQuote={(pricePerM2) => {
+              setSettings((s) => ({ ...s, pricePerM2 }));
+              setFlash("Prix moyen fournisseur appliqué au devis.");
+            }}
+            onEditPrices={() => setTab("catalogue")}
+          />
+        )}
+
+        {result && current && (
+          <JobNeedPanel
+            need={jobNeed}
+            items={stock}
+            moves={moves}
+            catalog={catalog}
+            specs={specs}
+            quoteNumber={settings.quoteNumber}
+            projectId={currentProjectId}
+            projectName={projectMeta.name}
+            deduction={stockDeduction}
+            onStock={(nextItems, nextMoves) => {
+              setStock(nextItems);
+              setMoves(nextMoves);
+            }}
+            onDeduction={(d) => {
+              setStockDeduction(d);
+              if (currentProjectId) {
+                setProjects((prev) =>
+                  prev.map((p) =>
+                    p.id === currentProjectId
+                      ? {
+                          ...p,
+                          stockDeduction: d,
+                          updatedAt: new Date().toISOString(),
+                        }
+                      : p,
+                  ),
+                );
+              }
+            }}
+          />
+        )}
 
         {result && current && (
           <>
@@ -937,12 +990,13 @@ function Home() {
             </div>
           )}
         </section>
+          </>
+        )}
       </main>
 
       <footer className="app-footer no-print mx-auto max-w-6xl px-4 pb-10 text-xs text-muted-foreground sm:px-6">
-        Unités en millimètres. Les références de panneaux se gèrent dans la
-        rubrique Panneaux. En desktop, les projets sont aussi enregistrés dans le
-        dossier de données de l’application.
+        Unités en millimètres. Familles, références et stocks sont globaux. Les
+        projets conservent l’historique des prix et des déductions.
       </footer>
 
       <ConfirmDialog

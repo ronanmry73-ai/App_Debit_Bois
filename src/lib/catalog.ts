@@ -25,6 +25,8 @@ export type PanelRef = {
   name: string;
   length: number;
   width: number;
+  /** Prix d’achat fournisseur €/m². null = non renseigné. */
+  pricePerM2: number | null;
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -42,6 +44,7 @@ export type PanelSpec = {
   label: string;
   familyId: string;
   familyName: string;
+  pricePerM2?: number | null;
 };
 
 function nowIso(): string {
@@ -57,6 +60,81 @@ export function normalizeKey(s: string): string {
     .replace(/\s+/g, " ");
 }
 
+function roundCents(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** Accepte une saisie utilisateur (virgule ou point). Vide = pas de prix. */
+export function parsePriceInput(
+  raw: string | number | null | undefined,
+): { ok: true; value: number | null } | { ok: false; error: string } {
+  if (raw == null) return { ok: true, value: null };
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) {
+      return { ok: false, error: "Le prix au m² doit être un nombre." };
+    }
+    if (raw < 0) {
+      return { ok: false, error: "Le prix au m² ne peut pas être négatif." };
+    }
+    if (raw === 0) {
+      return {
+        ok: false,
+        error: "Indiquez un prix au m² strictement positif, ou laissez le champ vide.",
+      };
+    }
+    return { ok: true, value: roundCents(raw) };
+  }
+  const t = String(raw)
+    .trim()
+    .replace(/\s/g, "")
+    .replace("€", "")
+    .replace("/m²", "")
+    .replace("/m2", "")
+    .replace(",", ".");
+  if (!t) return { ok: true, value: null };
+  const n = Number(t);
+  if (!Number.isFinite(n)) {
+    return { ok: false, error: "Le prix au m² doit être un nombre." };
+  }
+  if (n < 0) {
+    return { ok: false, error: "Le prix au m² ne peut pas être négatif." };
+  }
+  if (n === 0) {
+    return {
+      ok: false,
+      error: "Indiquez un prix au m² strictement positif, ou laissez le champ vide.",
+    };
+  }
+  return { ok: true, value: roundCents(n) };
+}
+
+/** Lecture souple pour la migration : valeurs invalides → null, sans bloquer. */
+export function normalizePricePerM2(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  const parsed = parsePriceInput(raw as string | number);
+  return parsed.ok ? parsed.value : null;
+}
+
+function seedRef(
+  id: string,
+  name: string,
+  length: number,
+  width: number,
+  t: string,
+): PanelRef {
+  return {
+    id,
+    familyId: DEFAULT_FAMILY_ID,
+    name,
+    length,
+    width,
+    pricePerM2: null,
+    active: true,
+    createdAt: t,
+    updatedAt: t,
+  };
+}
+
 export function seedCatalog(): Catalog {
   const t = "2024-01-01T00:00:00.000Z";
   return {
@@ -70,26 +148,8 @@ export function seedCatalog(): Catalog {
       },
     ],
     refs: [
-      {
-        id: REF_A_ID,
-        familyId: DEFAULT_FAMILY_ID,
-        name: "P-400",
-        length: 2500,
-        width: 400,
-        active: true,
-        createdAt: t,
-        updatedAt: t,
-      },
-      {
-        id: REF_B_ID,
-        familyId: DEFAULT_FAMILY_ID,
-        name: "P-600",
-        length: 2500,
-        width: 600,
-        active: true,
-        createdAt: t,
-        updatedAt: t,
-      },
+      seedRef(REF_A_ID, "P-400", 2500, 400, t),
+      seedRef(REF_B_ID, "P-600", 2500, 600, t),
     ],
   };
 }
@@ -137,6 +197,7 @@ export function specsFromRefs(
       label: r.name ? `${label} · ${r.name}` : label,
       familyId: r.familyId,
       familyName: fam?.name ?? "",
+      pricePerM2: r.pricePerM2,
     };
   });
 }
@@ -268,7 +329,13 @@ export function deleteFamily(
 
 export function createRef(
   catalog: Catalog,
-  input: { familyId: string; name?: string; length: number; width: number },
+  input: {
+    familyId: string;
+    name?: string;
+    length: number;
+    width: number;
+    pricePerM2?: number | null | string;
+  },
 ): { catalog: Catalog; ref?: PanelRef; error?: string } {
   const length = Math.round(input.length);
   const width = Math.round(input.width);
@@ -284,6 +351,8 @@ export function createRef(
       error: `Cette famille a déjà une référence ${length} × ${width} mm.`,
     };
   }
+  const price = parsePriceInput(input.pricePerM2 ?? null);
+  if (!price.ok) return { catalog, error: price.error };
   const t = nowIso();
   const ref: PanelRef = {
     id: newId(),
@@ -291,6 +360,7 @@ export function createRef(
     name: (input.name ?? "").trim(),
     length,
     width,
+    pricePerM2: price.value,
     active: true,
     createdAt: t,
     updatedAt: t,
@@ -301,7 +371,13 @@ export function createRef(
 export function updateRef(
   catalog: Catalog,
   id: string,
-  patch: { familyId?: string; name?: string; length?: number; width?: number },
+  patch: {
+    familyId?: string;
+    name?: string;
+    length?: number;
+    width?: number;
+    pricePerM2?: number | null | string;
+  },
 ): { catalog: Catalog; error?: string } {
   const current = refById(catalog, id);
   if (!current) return { catalog, error: "Référence introuvable." };
@@ -321,12 +397,20 @@ export function updateRef(
       error: `Cette famille a déjà une référence ${length} × ${width} mm.`,
     };
   }
+  let pricePerM2 = current.pricePerM2;
+  if (patch.pricePerM2 !== undefined) {
+    const price = parsePriceInput(patch.pricePerM2);
+    if (!price.ok) return { catalog, error: price.error };
+    pricePerM2 = price.value;
+  }
   const t = nowIso();
   return {
     catalog: {
       ...catalog,
       refs: catalog.refs.map((r) =>
-        r.id === id ? { ...r, familyId, name, length, width, updatedAt: t } : r,
+        r.id === id
+          ? { ...r, familyId, name, length, width, pricePerM2, updatedAt: t }
+          : r,
       ),
     },
   };
@@ -406,6 +490,19 @@ export function pieceFitsSpec(
   return false;
 }
 
+function coerceRef(raw: PanelRef): PanelRef {
+  return {
+    ...raw,
+    name: typeof raw.name === "string" ? raw.name : "",
+    length: Number(raw.length),
+    width: Number(raw.width),
+    pricePerM2: normalizePricePerM2(raw.pricePerM2),
+    active: raw.active !== false,
+    createdAt: raw.createdAt || nowIso(),
+    updatedAt: raw.updatedAt || raw.createdAt || nowIso(),
+  };
+}
+
 export function migrateCatalog(raw: unknown): Catalog {
   const seed = seedCatalog();
   if (!raw || typeof raw !== "object") return seed;
@@ -414,13 +511,15 @@ export function migrateCatalog(raw: unknown): Catalog {
   const refs = Array.isArray(c.refs) ? c.refs : [];
   const next: Catalog = {
     families: families.filter((f) => f && typeof f.id === "string" && f.name),
-    refs: refs.filter(
-      (r) =>
-        r &&
-        typeof r.id === "string" &&
-        Number(r.length) > 0 &&
-        Number(r.width) > 0,
-    ),
+    refs: refs
+      .filter(
+        (r) =>
+          r &&
+          typeof r.id === "string" &&
+          Number(r.length) > 0 &&
+          Number(r.width) > 0,
+      )
+      .map(coerceRef),
   };
   if (!next.families.some((f) => f.id === DEFAULT_FAMILY_ID)) {
     next.families = [...seed.families, ...next.families];
@@ -451,7 +550,7 @@ export function mergeCatalog(
     const familyId = families.some((f) => f.id === r.familyId)
       ? r.familyId
       : (families[0]?.id ?? DEFAULT_FAMILY_ID);
-    const candidate = { ...r, familyId };
+    const candidate = coerceRef({ ...r, familyId });
     if (findDuplicateRef({ families, refs }, familyId, candidate.length, candidate.width)) {
       continue;
     }
