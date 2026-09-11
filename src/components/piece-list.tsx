@@ -17,6 +17,7 @@ type Props = {
   families: PanelFamily[];
   catalog: Catalog;
   specs: PanelSpec[];
+  onClear?: () => void;
 };
 
 function parseNum(s: string): number {
@@ -32,6 +33,7 @@ export function PieceList({
   families,
   catalog,
   specs,
+  onClear,
 }: Props) {
   function update(id: string, patch: Partial<PieceRow>) {
     onChange(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -70,14 +72,21 @@ export function PieceList({
             m² à débiter
           </p>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => onChange([...rows, emptyRow()])}
-        >
-          <Plus />
-          Ajouter une pièce
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {onClear && (
+            <Button type="button" variant="ghost" onClick={onClear}>
+              Vider la liste
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onChange([...rows, emptyRow()])}
+          >
+            <Plus />
+            Ajouter une pièce
+          </Button>
+        </div>
       </div>
 
       <div className="hidden overflow-hidden rounded-lg border border-border bg-card md:block">

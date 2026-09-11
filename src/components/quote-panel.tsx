@@ -266,7 +266,7 @@ export function QuotePanel({
               <p>{selling.error}</p>
               {incomplete && (
                 <p className="mt-1">
-                  Complétez les prix au m² dans Familles et références. Aucun
+                  Complétez les prix au m² dans le catalogue. Aucun
                   montant n’est inventé.
                 </p>
               )}
@@ -330,7 +330,7 @@ function SellingRecap({
         </p>
         <Button type="button" onClick={onGenerateQuote} className="no-print">
           <FileText />
-          Générer le devis
+          PDF client
         </Button>
       </div>
     </>

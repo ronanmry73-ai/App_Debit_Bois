@@ -4,6 +4,10 @@ import type { AppSettings, HardwareItem, PieceRow, QuoteIdentity } from "./types
 export const STORAGE_KEY = "debit-bois-v5";
 export const LEGACY_STORAGE_KEY = "debit-bois-v4";
 
+/** Identité d’exemple (jeu chargeable uniquement — jamais un projet neuf). */
+export const DEMO_COMPANY_NAME = "Atelier Bois Clair";
+export const DEMO_CLIENT_NAME = "M. et Mme Martin";
+
 export function exampleRows(): PieceRow[] {
   return [
     { id: "ex-1", name: "Montant", length: "1800", width: "380", qty: "2" },
@@ -52,12 +56,12 @@ export function defaultQuoteIdentity(): QuoteIdentity {
   const year = new Date().getFullYear();
   const today = new Date().toISOString().slice(0, 10);
   return {
-    companyName: "Atelier Bois Clair",
+    companyName: DEMO_COMPANY_NAME,
     companyAddress: "12 rue des Ateliers\n69003 Lyon",
     companyPhone: "04 78 12 34 56",
     companyEmail: "contact@atelier-bois-clair.fr",
     companySiret: "123 456 789 00012",
-    clientName: "M. et Mme Martin",
+    clientName: DEMO_CLIENT_NAME,
     quoteDate: today,
     quoteNumber: `DEVIS-${year}-001`,
     furnitureDescription: "Meuble sur mesure — bibliothèque salon",
@@ -69,13 +73,118 @@ export function defaultQuoteIdentity(): QuoteIdentity {
   };
 }
 
-/** Atelier par défaut, client vide — c’est l’état d’un projet neuf. */
-export function blankProjectIdentity(): QuoteIdentity {
+/** Projet neuf : valeurs vides. Les libellés d’exemple restent des placeholders CSS. */
+export function emptyQuoteIdentity(): QuoteIdentity {
+  const today = new Date().toISOString().slice(0, 10);
   return {
-    ...defaultQuoteIdentity(),
+    companyName: "",
+    companyAddress: "",
+    companyPhone: "",
+    companyEmail: "",
+    companySiret: "",
+    clientName: "",
+    quoteDate: today,
+    quoteNumber: "",
+    furnitureDescription: "",
+    validity: "",
+    payment: "",
+    legal: "",
+    vatPct: 20,
+    logoDataUrl: "",
+  };
+}
+
+/** @deprecated alias — un projet neuf n’embarque plus l’identité démo. */
+export function blankProjectIdentity(): QuoteIdentity {
+  return emptyQuoteIdentity();
+}
+
+export function isDemoCompany(name: string): boolean {
+  return name.trim() === DEMO_COMPANY_NAME;
+}
+
+export type WorkshopPrefs = {
+  companyName: string;
+  companyAddress: string;
+  companyPhone: string;
+  companyEmail: string;
+  companySiret: string;
+  logoDataUrl: string;
+  hourlyRate: number;
+  vatPct: number;
+  validity: string;
+  payment: string;
+  legal: string;
+};
+
+export function emptyWorkshopPrefs(): WorkshopPrefs {
+  return {
+    companyName: "",
+    companyAddress: "",
+    companyPhone: "",
+    companyEmail: "",
+    companySiret: "",
+    logoDataUrl: "",
+    hourlyRate: 45,
+    vatPct: 20,
+    validity: "",
+    payment: "",
+    legal: "",
+  };
+}
+
+export function workshopPrefsFromSettings(s: AppSettings): WorkshopPrefs {
+  return {
+    companyName: s.companyName,
+    companyAddress: s.companyAddress,
+    companyPhone: s.companyPhone,
+    companyEmail: s.companyEmail,
+    companySiret: s.companySiret,
+    logoDataUrl: s.logoDataUrl,
+    hourlyRate: s.hourlyRate,
+    vatPct: s.vatPct,
+    validity: s.validity,
+    payment: s.payment,
+    legal: s.legal,
+  };
+}
+
+export function settingsFromWorkshopPrefs(prefs: WorkshopPrefs): AppSettings {
+  return {
+    ...emptyQuoteIdentity(),
+    ...prefs,
     clientName: "",
     furnitureDescription: "",
+    quoteNumber: "",
+    kerf: 3,
+    allowRotation: true,
+    method: "auto",
+    pricePerM2: null,
+    forcePricePerM2: false,
+    wastePct: 0,
+    marginPct: 20,
+    surfaceOverrideM2: null,
+    laborHours: 0,
+    hardwareItems: [{ id: "hw-empty-1", name: "", qty: "1", unitPrice: "" }],
   };
+}
+
+export function migrateWorkshopPrefs(
+  raw: unknown,
+  settings: AppSettings,
+): WorkshopPrefs {
+  if (raw && typeof raw === "object") {
+    const o = raw as Partial<WorkshopPrefs>;
+    return {
+      ...emptyWorkshopPrefs(),
+      ...o,
+      companyName: typeof o.companyName === "string" ? o.companyName : "",
+    };
+  }
+  if (settings.companyName && !isDemoCompany(settings.companyName)) {
+    return workshopPrefsFromSettings(settings);
+  }
+  return emptyWorkshopPrefs();
 }
 
 export const METHOD_OPTIONS = [

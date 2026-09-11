@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld("debitBoisDesktop", {
   exportFile: (suggestedName, content) =>
     ipcRenderer.invoke("debit-bois:export-file", suggestedName, content),
   importFile: () => ipcRenderer.invoke("debit-bois:import-file"),
+  setTitle: (title) => ipcRenderer.invoke("debit-bois:set-title", title),
 });

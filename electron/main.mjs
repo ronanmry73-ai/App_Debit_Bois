@@ -284,6 +284,14 @@ function registerStoreIpc() {
       return null;
     }
   });
+
+  ipcMain.handle("debit-bois:set-title", (_event, title) => {
+    const t =
+      typeof title === "string" && title.trim() ? title.trim() : "Débit Bois";
+    const win = BrowserWindow.getFocusedWindow() || mainWindow;
+    win?.setTitle(t);
+    return true;
+  });
 }
 
 app.whenReady().then(async () => {

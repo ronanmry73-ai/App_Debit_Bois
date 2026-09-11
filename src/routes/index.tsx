@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
   FileText,
-  Printer,
   Calculator,
   ChevronDown,
   Package,
   Layers,
-  FolderOpen,
+  Hammer,
+  Settings2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -16,13 +16,13 @@ import { SettingsBar } from "@/components/settings-bar";
 import { ResultsPanel } from "@/components/results-panel";
 import { QuotePanel } from "@/components/quote-panel";
 import { QuoteDocument } from "@/components/quote-document";
-import { CuttingPlanList } from "@/components/cutting-plan";
 import { StockPanel } from "@/components/stock-panel";
 import { CatalogPanel } from "@/components/catalog-panel";
 import { ProjectsBar } from "@/components/projects-bar";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { JobNeedPanel } from "@/components/job-need-panel";
 import { SupplierCostPanel } from "@/components/supplier-cost-panel";
+import { AtelierSheet } from "@/components/atelier-sheet";
 import {
   optimizeCutting,
   type OptimizeOutput,
@@ -42,7 +42,11 @@ import {
 import {
   emptyRow,
   INITIAL_EMPTY_ROW,
-  blankProjectIdentity,
+  emptyQuoteIdentity,
+  emptyWorkshopPrefs,
+  isDemoCompany,
+  settingsFromWorkshopPrefs,
+  type WorkshopPrefs,
 } from "@/lib/presets";
 import {
   packingSpecs,
@@ -61,6 +65,7 @@ import {
   type Project,
 } from "@/lib/projects";
 import {
+  applyWindowTitle,
   emptyMeta,
   exportText,
   importText,
@@ -70,11 +75,12 @@ import {
 } from "@/lib/persist";
 import type { AppSettings, PieceRow } from "@/lib/types";
 import { effectivePurchasePrice, supplierCostFromCounts } from "@/lib/supplier";
+import { newId } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({ component: Home });
 
 const DEFAULT_SETTINGS: AppSettings = {
-  ...blankProjectIdentity(),
+  ...emptyQuoteIdentity(),
   kerf: 3,
   allowRotation: true,
   method: "auto",
@@ -88,7 +94,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   hardwareItems: [{ id: "hw-empty-1", name: "", qty: "1", unitPrice: "" }],
 };
 
-type AppTab = "projet" | "catalogue" | "stocks";
+type ViewMode = "atelier" | "stock" | "devis";
 
 type DialogState =
   | { kind: "none" }
@@ -97,6 +103,7 @@ type DialogState =
   | { kind: "rename"; id: string }
   | { kind: "delete"; id: string }
   | { kind: "import-dup"; project: Project; catalog?: Catalog }
+  | { kind: "clear-rows" }
   | { kind: "alert"; title: string; message: string };
 
 function parseRows(rows: PieceRow[], catalog: Catalog): PieceDef[] {
@@ -142,6 +149,17 @@ function usedFromOutput(out: OptimizeOutput | null): string[] {
   return [...ids];
 }
 
+function printSheet(kind: "atelier" | "client") {
+  const cls = kind === "atelier" ? "print-atelier" : "print-client";
+  document.body.classList.add(cls);
+  const cleanup = () => {
+    document.body.classList.remove(cls);
+    window.removeEventListener("afterprint", cleanup);
+  };
+  window.addEventListener("afterprint", cleanup);
+  window.print();
+}
+
 function Home() {
   const [rows, setRows] = useState<PieceRow[]>([INITIAL_EMPTY_ROW]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -162,7 +180,9 @@ function Home() {
   const [savedFp, setSavedFp] = useState("");
   const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
   const [promptValue, setPromptValue] = useState("");
-  const [tab, setTab] = useState<AppTab>("projet");
+  const [viewMode, setViewMode] = useState<ViewMode>("atelier");
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [workshopPrefs, setWorkshopPrefs] = useState<WorkshopPrefs>(emptyWorkshopPrefs);
   const skipNextPack = useRef(false);
   const skipWastePrefill = useRef(true);
   const lastPlanId = useRef("");
@@ -191,18 +211,29 @@ function Home() {
         if (cancelled) return;
         skipNextPack.current = true;
         setRows(saved.rows);
-        setSettings({ ...DEFAULT_SETTINGS, ...saved.settings });
+        const named = saved.projects.find((p) => p.id === saved.currentProjectId);
+        const prefs = saved.workshopPrefs ?? emptyWorkshopPrefs();
+        let nextSettings: AppSettings = { ...DEFAULT_SETTINGS, ...saved.settings };
+        if (!named && isDemoCompany(nextSettings.companyName) && !prefs.companyName.trim()) {
+          nextSettings = {
+            ...nextSettings,
+            ...emptyQuoteIdentity(),
+            ...prefs,
+            clientName: saved.projectMeta.clientName || "",
+          };
+        }
+        setSettings(nextSettings);
         const stockSynced = syncStockWithCatalog(saved.stock, saved.catalog);
         setStock(stockSynced);
         setMoves(saved.moves);
         setCatalog(saved.catalog);
         setProjects(saved.projects);
-        setCurrentProjectId(saved.currentProjectId);
         setProjectMeta(saved.projectMeta);
         setUsedRefIds(saved.usedRefIds);
         setSelected(saved.selectedStrategy || "mixed");
-        const named = saved.projects.find((p) => p.id === saved.currentProjectId);
+        setWorkshopPrefs(prefs);
         setStockDeduction(named?.stockDeduction ?? saved.stockDeduction ?? null);
+        setCurrentProjectId(saved.currentProjectId || newId());
         setSavedFp(
           named
             ? fpOf({
@@ -218,7 +249,7 @@ function Home() {
               })
             : fpOf({
                 rows: saved.rows,
-                settings: { ...DEFAULT_SETTINGS, ...saved.settings },
+                settings: nextSettings,
                 selected: saved.selectedStrategy || "mixed",
                 meta: saved.projectMeta,
               }),
@@ -247,6 +278,7 @@ function Home() {
         selectedStrategy: selected,
         usedRefIds,
         stockDeduction,
+        workshopPrefs,
       });
     }, 280);
     return () => clearTimeout(t);
@@ -263,6 +295,7 @@ function Home() {
     selected,
     usedRefIds,
     stockDeduction,
+    workshopPrefs,
   ]);
 
   useEffect(() => {
@@ -324,6 +357,11 @@ function Home() {
     const t = setTimeout(() => setFlash(null), 4500);
     return () => clearTimeout(t);
   }, [flash]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    applyWindowTitle(projectMeta.name, dirty);
+  }, [hydrated, projectMeta.name, dirty]);
 
   function calculate() {
     skipWastePrefill.current = false;
@@ -426,9 +464,46 @@ function Home() {
     setSettings((s) => (s.wastePct === tau ? s : { ...s, wastePct: tau }));
   }, [current, selected, settings.wastePct]);
 
-  function generateQuote() {
-    const el = document.getElementById("quote-sheet");
-    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  function goDevis() {
+    setCatalogOpen(false);
+    setViewMode("devis");
+    requestAnimationFrame(() => {
+      document.getElementById("quote-sheet")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
+
+  function patchSettings(patch: Partial<AppSettings>) {
+    setSettings((s) => ({ ...s, ...patch }));
+    if (patch.clientName !== undefined) {
+      setProjectMeta((m) => ({ ...m, clientName: patch.clientName ?? "" }));
+    }
+    setWorkshopPrefs((p) => {
+      const next = { ...p };
+      let changed = false;
+      const map: Array<[keyof WorkshopPrefs, keyof AppSettings]> = [
+        ["companyName", "companyName"],
+        ["companyAddress", "companyAddress"],
+        ["companyPhone", "companyPhone"],
+        ["companyEmail", "companyEmail"],
+        ["companySiret", "companySiret"],
+        ["logoDataUrl", "logoDataUrl"],
+        ["hourlyRate", "hourlyRate"],
+        ["vatPct", "vatPct"],
+        ["validity", "validity"],
+        ["payment", "payment"],
+        ["legal", "legal"],
+      ];
+      for (const [pk, sk] of map) {
+        if (patch[sk] !== undefined && patch[sk] !== next[pk]) {
+          (next as Record<string, unknown>)[pk] = patch[sk];
+          changed = true;
+        }
+      }
+      return changed ? next : p;
+    });
   }
 
   const specLabels = useMemo(
@@ -542,28 +617,21 @@ function Home() {
   function resetWorkspace() {
     const nextRows = [emptyRow()];
     const nextMeta = emptyMeta();
-    const nextSettings: AppSettings = {
-      ...DEFAULT_SETTINGS,
-      companyName: settings.companyName,
-      companyAddress: settings.companyAddress,
-      companyPhone: settings.companyPhone,
-      companyEmail: settings.companyEmail,
-      companySiret: settings.companySiret,
-      quoteNumber: settings.quoteNumber,
-      logoDataUrl: settings.logoDataUrl,
-    };
+    const nextSettings = settingsFromWorkshopPrefs(workshopPrefs);
     skipNextPack.current = true;
     skipWastePrefill.current = true;
     lastPlanId.current = "";
     setRows(nextRows);
     setResult(null);
     setError(null);
-    setCurrentProjectId(null);
+    setCurrentProjectId(newId());
     setProjectMeta(nextMeta);
     setUsedRefIds([]);
     setSelected("mixed");
     setSettings(nextSettings);
     setStockDeduction(null);
+    setCatalogOpen(false);
+    setViewMode("atelier");
     setSavedFp(
       fpOf({
         rows: nextRows,
@@ -586,7 +654,8 @@ function Home() {
     rememberSaved(p);
     setError(null);
     setFlash(`Projet « ${p.name} » ouvert.`);
-    setTab("projet");
+    setCatalogOpen(false);
+    setViewMode("atelier");
   }
 
   function applyImported(project: Project, incomingCatalog?: Catalog, rename?: string) {
@@ -657,59 +726,74 @@ function Home() {
             <div>
               <p className="font-display text-xl font-medium tracking-tight">Débit Bois</p>
               <p className="text-sm text-muted-foreground">
-                Calepinage, devis et projets — références de panneaux paramétrables
+                {projectMeta.name.trim() || "Sans titre"}
+                {dirty ? " •" : ""}
+                {" — poste d’atelier"}
               </p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
-              variant={tab === "projet" ? "default" : "outline"}
-              onClick={() => setTab("projet")}
+              variant={!catalogOpen && viewMode === "atelier" ? "default" : "outline"}
+              onClick={() => {
+                setCatalogOpen(false);
+                setViewMode("atelier");
+              }}
             >
-              <FolderOpen />
-              Projet
+              <Hammer />
+              Atelier
             </Button>
             <Button
               type="button"
-              variant={tab === "catalogue" ? "default" : "outline"}
-              onClick={() => setTab("catalogue")}
-            >
-              <Layers />
-              Familles et références
-            </Button>
-            <Button
-              type="button"
-              variant={tab === "stocks" ? "default" : "outline"}
-              onClick={() => setTab("stocks")}
+              variant={!catalogOpen && viewMode === "stock" ? "default" : "outline"}
+              onClick={() => {
+                setCatalogOpen(false);
+                setViewMode("stock");
+              }}
             >
               <Package />
-              Stocks atelier
+              Stock
             </Button>
             <Button
               type="button"
-              variant="outline"
+              variant={!catalogOpen && viewMode === "devis" ? "default" : "outline"}
               onClick={() => {
-                setTab("projet");
-                generateQuote();
-                window.print();
+                setCatalogOpen(false);
+                setViewMode("devis");
               }}
-              disabled={!result}
-            >
-              <Printer />
-              Imprimer / PDF
-            </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                setTab("projet");
-                generateQuote();
-              }}
-              disabled={!result}
             >
               <FileText />
-              Générer le devis
+              Devis
             </Button>
+            <Button
+              type="button"
+              variant={catalogOpen ? "default" : "ghost"}
+              onClick={() => setCatalogOpen((v) => !v)}
+            >
+              <Settings2 />
+              Catalogue
+            </Button>
+            {viewMode === "atelier" && !catalogOpen && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => printSheet("atelier")}
+                disabled={!result || !current}
+              >
+                Fiche atelier / PDF
+              </Button>
+            )}
+            {viewMode === "devis" && !catalogOpen && (
+              <Button
+                type="button"
+                onClick={() => printSheet("client")}
+                disabled={!result || !current}
+              >
+                <FileText />
+                PDF client
+              </Button>
+            )}
           </div>
         </div>
       </header>
@@ -730,7 +814,7 @@ function Home() {
           </div>
         )}
 
-        {tab === "catalogue" && (
+        {catalogOpen && (
           <CatalogPanel
             catalog={catalog}
             usedRefIds={blockedRefIds}
@@ -743,223 +827,155 @@ function Home() {
           />
         )}
 
-        {tab === "stocks" && (
+        {!catalogOpen && viewMode === "stock" && (
           <StockPanel
             items={stock}
             moves={moves}
             onItems={setStock}
             onMoves={setMoves}
             catalog={catalog}
-          />
-        )}
-
-        {tab === "projet" && (
-          <>
-        <ProjectsBar
-          meta={projectMeta}
-          onMeta={(patch) => {
-            setProjectMeta((m) => ({ ...m, ...patch }));
-            if (patch.clientName !== undefined) {
-              setSettings((s) => ({ ...s, clientName: patch.clientName ?? "" }));
-            }
-          }}
-          currentId={currentProjectId}
-          dirty={dirty}
-          projects={projects}
-          onNew={() => guardUnsaved(() => resetWorkspace())}
-          onSave={() => {
-            saveCurrent();
-          }}
-          onSaveAs={() => {
-            setPromptValue(projectMeta.name ? `${projectMeta.name} (copie)` : "");
-            setDialog({ kind: "save-as" });
-          }}
-          onOpen={(id) => {
-            const p = projects.find((x) => x.id === id);
-            if (!p) return;
-            if (id === currentProjectId) return;
-            guardUnsaved(() => openProject(p));
-          }}
-          onClose={() => guardUnsaved(() => resetWorkspace())}
-          onDuplicate={(id) => {
-            const p = projects.find((x) => x.id === id);
-            if (!p) return;
-            const copy = duplicateProject(p);
-            setProjects((prev) => [...prev, copy]);
-            guardUnsaved(() => openProject(copy));
-          }}
-          onRename={(id) => {
-            const p = projects.find((x) => x.id === id);
-            if (!p) return;
-            setPromptValue(p.name);
-            setDialog({ kind: "rename", id });
-          }}
-          onDelete={(id) => setDialog({ kind: "delete", id })}
-          onExport={() => {
-            void handleExport();
-          }}
-          onImport={() => {
-            void handleImport();
-          }}
-        />
-
-        <Card className="no-print">
-          <CardHeader>
-            <CardTitle>Options de découpe</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-5">
-            <SettingsBar
-              settings={settings}
-              onChange={(patch) => setSettings((s) => ({ ...s, ...patch }))}
-            />
-            <div className="flex flex-wrap items-center gap-3">
-              <Button type="button" size="lg" onClick={calculate}>
-                <Calculator />
-                Calculer le débit
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setRows([emptyRow()]);
-                  setResult(null);
-                  setError(null);
-                }}
-              >
-                Vider la liste
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="no-print">
-          <PieceList
-            rows={rows}
-            onChange={setRows}
-            kerf={settings.kerf}
-            allowRotation={settings.allowRotation}
-            families={catalog.families}
-            catalog={catalog}
-            specs={specs}
-          />
-        </div>
-
-        {result && result.warnings.length > 0 && (
-          <div className="no-print rounded-xl border border-destructive/30 bg-card px-4 py-3 text-sm text-destructive">
-            <ul className="space-y-1">
-              {result.warnings.map((w) => (
-                <li key={`${w.pieceId}-${w.message}`}>{w.message}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {result && current && (
-          <div className="no-print">
-            <ResultsPanel
-              strategies={result.strategies}
-              selected={selected}
-              bestId={result.bestId}
-              onSelect={(id) => {
-                skipWastePrefill.current = false;
-                lastPlanId.current = "";
-                setSelected(id);
-              }}
-              stock={stock}
-              specs={specs}
-            />
-          </div>
-        )}
-
-        {result && current && (
-          <SupplierCostPanel
-            live={liveSupplier}
-            snapshot={
-              projects.find((p) => p.id === currentProjectId)?.supplierSnapshot ??
-              null
-            }
-            onEditPrices={() => setTab("catalogue")}
-          />
-        )}
-
-        {result && current && (
-          <JobNeedPanel
-            need={jobNeed}
-            items={stock}
-            moves={moves}
-            catalog={catalog}
-            specs={specs}
-            quoteNumber={settings.quoteNumber}
-            projectId={currentProjectId}
-            projectName={projectMeta.name}
             deduction={stockDeduction}
-            onStock={(nextItems, nextMoves) => {
-              setStock(nextItems);
-              setMoves(nextMoves);
-            }}
-            onDeduction={(d) => {
-              setStockDeduction(d);
-              if (currentProjectId) {
-                setProjects((prev) =>
-                  prev.map((p) =>
-                    p.id === currentProjectId
-                      ? {
-                          ...p,
-                          stockDeduction: d,
-                          updatedAt: new Date().toISOString(),
-                        }
-                      : p,
-                  ),
-                );
-              }
-            }}
+            onCatalog={() => setCatalogOpen(true)}
           />
         )}
 
-        {result && current && (
+        {!catalogOpen && viewMode === "atelier" && (
           <>
+            <ProjectsBar
+              meta={projectMeta}
+              onMeta={(patch) => {
+                setProjectMeta((m) => ({ ...m, ...patch }));
+                if (patch.clientName !== undefined) {
+                  setSettings((s) => ({ ...s, clientName: patch.clientName ?? "" }));
+                }
+              }}
+              currentId={currentProjectId}
+              dirty={dirty}
+              projects={projects}
+              onNew={() => guardUnsaved(() => resetWorkspace())}
+              onSave={() => {
+                saveCurrent();
+              }}
+              onSaveAs={() => {
+                setPromptValue(projectMeta.name ? `${projectMeta.name} (copie)` : "");
+                setDialog({ kind: "save-as" });
+              }}
+              onOpen={(id) => {
+                const p = projects.find((x) => x.id === id);
+                if (!p) return;
+                if (id === currentProjectId) return;
+                guardUnsaved(() => openProject(p));
+              }}
+              onClose={() => guardUnsaved(() => resetWorkspace())}
+              onDuplicate={(id) => {
+                const p = projects.find((x) => x.id === id);
+                if (!p) return;
+                const copy = duplicateProject(p);
+                setProjects((prev) => [...prev, copy]);
+                guardUnsaved(() => openProject(copy));
+              }}
+              onRename={(id) => {
+                const p = projects.find((x) => x.id === id);
+                if (!p) return;
+                setPromptValue(p.name);
+                setDialog({ kind: "rename", id });
+              }}
+              onDelete={(id) => setDialog({ kind: "delete", id })}
+              onExport={() => {
+                void handleExport();
+              }}
+              onImport={() => {
+                void handleImport();
+              }}
+            />
+
+            <Card className="no-print">
+              <CardHeader>
+                <CardTitle>Options de découpe</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-5">
+                <SettingsBar
+                  settings={settings}
+                  onChange={(patch) => setSettings((s) => ({ ...s, ...patch }))}
+                />
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button type="button" size="lg" onClick={calculate}>
+                    <Calculator />
+                    Calculer le débit
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setCatalogOpen(true)}
+                  >
+                    <Layers />
+                    Catalogue
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
             <div className="no-print">
-              <QuotePanel
-                settings={settings}
-                onChange={(patch) => {
-                  setSettings((s) => ({ ...s, ...patch }));
-                  if (patch.clientName !== undefined) {
-                    setProjectMeta((m) => ({ ...m, clientName: patch.clientName ?? "" }));
-                  }
-                }}
-                usefulAreaM2={autoSurfaceM2}
-                purchasedAreaM2={purchasedAreaM2}
+              <PieceList
+                rows={rows}
+                onChange={setRows}
+                kerf={settings.kerf}
+                allowRotation={settings.allowRotation}
+                families={catalog.families}
+                catalog={catalog}
+                specs={specs}
+                onClear={() => setDialog({ kind: "clear-rows" })}
+              />
+            </div>
+
+            {result && result.warnings.length > 0 && (
+              <div className="no-print rounded-xl border border-destructive/30 bg-card px-4 py-3 text-sm text-destructive">
+                <ul className="space-y-1">
+                  {result.warnings.map((w) => (
+                    <li key={`${w.pieceId}-${w.message}`}>{w.message}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {result && current && (
+              <div className="no-print">
+                <ResultsPanel
+                  strategies={result.strategies}
+                  selected={selected}
+                  bestId={result.bestId}
+                  onSelect={(id) => {
+                    skipWastePrefill.current = false;
+                    lastPlanId.current = "";
+                    setSelected(id);
+                  }}
+                  stock={stock}
+                  specs={specs}
+                />
+              </div>
+            )}
+
+            {result && current && (
+              <AtelierSheet
+                projectName={projectMeta.name}
+                clientName={projectMeta.clientName || settings.clientName}
+                rows={rows}
+                strategy={current}
+                kerf={settings.kerf}
+                wastePct={settings.wastePct}
                 planWastePct={tauPlan}
-                livePricePerM2={liveSupplier?.weightedPricePerM2 ?? null}
-                supplier={liveSupplier}
-                onGenerateQuote={generateQuote}
+                onWastePct={(wastePct) => setSettings((s) => ({ ...s, wastePct }))}
                 onResetWaste={() => {
                   skipWastePrefill.current = false;
                   setSettings((s) => ({ ...s, wastePct: tauPlan }));
                 }}
-                stock={stock}
-                onEnsureStock={(name, unitCost) =>
-                  setStock((prev) => ensureStockArticle(prev, name, unitCost))
-                }
+                supplier={liveSupplier}
+                hardware={settings.hardwareItems}
+                onPrint={() => printSheet("atelier")}
               />
-            </div>
+            )}
 
-            <QuoteDocument
-              settings={settings}
-              onChange={(patch) => {
-                setSettings((s) => ({ ...s, ...patch }));
-                if (patch.clientName !== undefined) {
-                  setProjectMeta((m) => ({ ...m, clientName: patch.clientName ?? "" }));
-                }
-              }}
-              selling={selling}
-              strategy={current}
-              supplier={liveSupplier}
-              stock={stock}
-              specs={specs}
-            />
-
-            {current.unplaced.length > 0 && (
+            {result && current && current.unplaced.length > 0 && (
               <div className="no-print rounded-xl border border-destructive/30 bg-card px-4 py-3 text-sm text-destructive">
                 Pièces non placées :{" "}
                 {current.unplaced
@@ -970,97 +986,149 @@ function Home() {
               </div>
             )}
 
-            <section
-              aria-labelledby="plans-title"
-              className="no-print flex flex-col gap-4"
-            >
-              <div className="flex flex-wrap items-end justify-between gap-2">
-                <div>
-                  <h2
-                    id="plans-title"
-                    className="font-display text-xl font-medium tracking-tight"
-                  >
-                    Plans de découpe
-                  </h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    La hachure représente la chute. Un ↻ indique une pièce tournée
-                    de 90°.
+            {result && current && (
+              <SupplierCostPanel
+                live={liveSupplier}
+                snapshot={
+                  projects.find((p) => p.id === currentProjectId)?.supplierSnapshot ??
+                  null
+                }
+                onEditPrices={() => setCatalogOpen(true)}
+              />
+            )}
+
+            {result && current && (
+              <JobNeedPanel
+                need={jobNeed}
+                items={stock}
+                moves={moves}
+                catalog={catalog}
+                specs={specs}
+                quoteNumber={settings.quoteNumber}
+                projectId={currentProjectId}
+                projectName={projectMeta.name}
+                deduction={stockDeduction}
+                onStock={(nextItems, nextMoves) => {
+                  setStock(nextItems);
+                  setMoves(nextMoves);
+                }}
+                onDeduction={(d) => {
+                  setStockDeduction(d);
+                  if (currentProjectId) {
+                    setProjects((prev) =>
+                      prev.map((p) =>
+                        p.id === currentProjectId
+                          ? {
+                              ...p,
+                              stockDeduction: d,
+                              updatedAt: new Date().toISOString(),
+                            }
+                          : p,
+                      ),
+                    );
+                  }
+                }}
+              />
+            )}
+
+            {!result && (
+              <p className="no-print rounded-xl bg-card px-5 py-8 text-center text-sm text-muted-foreground shadow-[var(--shadow-border)]">
+                Saisissez votre débit puis lancez le calcul pour obtenir le nombre de
+                panneaux et les plans de découpe.
+              </p>
+            )}
+
+            <section className="no-print">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-xl bg-card px-5 py-4 text-left shadow-[var(--shadow-border)]"
+                onClick={() => setAlgoOpen((v) => !v)}
+                aria-expanded={algoOpen}
+              >
+                <span className="font-display text-base font-medium">
+                  Comment le calepinage est calculé
+                </span>
+                <ChevronDown
+                  className={algoOpen ? "size-4 rotate-180 transition-transform duration-150" : "size-4 transition-transform duration-150"}
+                />
+              </button>
+              {algoOpen && (
+                <div className="mt-2 rounded-xl bg-card px-5 py-4 text-sm leading-relaxed text-ink-soft shadow-[var(--shadow-border)]">
+                  <p>
+                    L’outil compare une stratégie par référence de panneau active, plus
+                    un mix. Pour chaque stratégie, deux algorithmes de bin packing 2D
+                    sont évalués :
+                  </p>
+                  <ul className="mt-3 list-disc space-y-2 pl-5">
+                    <li>
+                      <strong>Rectangles maximaux (MaxRects)</strong> — on place
+                      chaque pièce dans le rectangle libre qui laisse le plus petit
+                      reliquat (BSSF, Best Short Side Fit). Bon rendement, plans
+                      parfois plus denses.
+                    </li>
+                    <li>
+                      <strong>Guillotine</strong> — chaque placement fend le
+                      panneau par des coupes droites successives. Plus proche d’une
+                      découpe à la scie sur table.
+                    </li>
+                  </ul>
+                  <p className="mt-3">
+                    Le trait de scie gonfle chaque pièce et le panneau de la même
+                    valeur. Une famille prioritaire restreint le calcul aux références
+                    actives de cette famille — sans repli silencieux.
                   </p>
                 </div>
-              </div>
-              <CuttingPlanList panels={current.panels} kerf={settings.kerf} />
+              )}
             </section>
           </>
         )}
 
-        {!result && (
-          <p className="no-print rounded-xl bg-card px-5 py-8 text-center text-sm text-muted-foreground shadow-[var(--shadow-border)]">
-            Saisissez votre débit puis lancez le calcul pour obtenir le nombre de
-            panneaux et les plans de découpe.
-          </p>
-        )}
-
-        <section className="no-print">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-xl bg-card px-5 py-4 text-left shadow-[var(--shadow-border)]"
-            onClick={() => setAlgoOpen((v) => !v)}
-            aria-expanded={algoOpen}
-          >
-            <span className="font-display text-base font-medium">
-              Comment le calepinage est calculé
-            </span>
-            <ChevronDown
-              className={algoOpen ? "size-4 rotate-180 transition-transform duration-150" : "size-4 transition-transform duration-150"}
+        {!catalogOpen && viewMode === "devis" && (
+          <>
+            <p className="no-print text-sm text-muted-foreground">
+              Projet {projectMeta.name.trim() || "Sans titre"}
+              {projectMeta.clientName ? ` · ${projectMeta.clientName}` : ""}
+              . Les plans restent dans Atelier. Ici : devis client.
+            </p>
+            <QuotePanel
+              settings={settings}
+              onChange={patchSettings}
+              usefulAreaM2={autoSurfaceM2}
+              purchasedAreaM2={purchasedAreaM2}
+              planWastePct={tauPlan}
+              livePricePerM2={liveSupplier?.weightedPricePerM2 ?? null}
+              supplier={liveSupplier}
+              onGenerateQuote={() => (current ? printSheet("client") : goDevis())}
+              onResetWaste={() => {
+                skipWastePrefill.current = false;
+                setSettings((s) => ({ ...s, wastePct: tauPlan }));
+              }}
+              stock={stock}
+              onEnsureStock={(name, unitCost) =>
+                setStock((prev) => ensureStockArticle(prev, name, unitCost))
+              }
             />
-          </button>
-          {algoOpen && (
-            <div className="mt-2 rounded-xl bg-card px-5 py-4 text-sm leading-relaxed text-ink-soft shadow-[var(--shadow-border)]">
-              <p>
-                L’outil compare une stratégie par référence de panneau active, plus
-                un mix. Pour chaque stratégie, deux algorithmes de bin packing 2D
-                sont évalués :
+            {result && current ? (
+              <QuoteDocument
+                settings={settings}
+                onChange={patchSettings}
+                selling={selling}
+                strategy={current}
+                supplier={liveSupplier}
+                onPrint={() => printSheet("client")}
+              />
+            ) : (
+              <p className="no-print rounded-xl bg-card px-5 py-8 text-center text-sm text-muted-foreground shadow-[var(--shadow-border)]">
+                Calculez un débit dans Atelier pour prévisualiser le devis client.
               </p>
-              <ul className="mt-3 list-disc space-y-2 pl-5">
-                <li>
-                  <strong>Rectangles maximaux (MaxRects)</strong> — on place
-                  chaque pièce dans le rectangle libre qui laisse le plus petit
-                  reliquat (BSSF, Best Short Side Fit). Bon rendement, plans
-                  parfois plus denses.
-                </li>
-                <li>
-                  <strong>Guillotine</strong> — chaque placement fend le
-                  panneau par des coupes droites successives. Plus proche d’une
-                  découpe à la scie sur table.
-                </li>
-              </ul>
-              <p className="mt-3">
-                Le trait de scie gonfle chaque pièce et le panneau de la même
-                valeur : les pièces sont séparées du kerf, sans « faux trait »
-                sur le bord du panneau. La rotation 90° est testée si elle est
-                activée. La stratégie retenue est celle qui minimise la surface
-                achetée, à pièces toutes placées. Une famille prioritaire sur une
-                pièce restreint le calcul aux références actives de cette famille
-                — sans repli silencieux sur une autre famille.
-              </p>
-              <p className="mt-3">
-                Le prix de vente valorise la surface utile : prix réel au m² =
-                prix moyen fournisseur / (1 − taux de perte), puis on ajoute
-                main d’œuvre (temps × taux) et quincaillerie, et on divise par
-                (1 − marge). Le prix moyen est la moyenne pondérée par la
-                surface des feuilles achetées — jamais un tarif unique inventé.
-                Le taux de perte est un jugement : par défaut la chute du plan.
-              </p>
-            </div>
-          )}
-        </section>
+            )}
           </>
         )}
       </main>
 
       <footer className="app-footer no-print mx-auto max-w-6xl px-4 pb-10 text-xs text-muted-foreground sm:px-6">
-        Unités en millimètres. Familles, références et stocks sont globaux. Les
-        projets conservent l’historique des prix et des déductions.
+        Unités en millimètres. Atelier, stock et devis. Catalogue à part. Le projet
+        est un fichier : enregistrez pour le conserver.
       </footer>
 
       <ConfirmDialog
@@ -1230,6 +1298,29 @@ function Home() {
                 createdAt: existing?.createdAt ?? dialog.project.createdAt,
               };
               applyImported(merged, dialog.catalog);
+              setDialog({ kind: "none" });
+            },
+          },
+        ]}
+      />
+
+      <ConfirmDialog
+        open={dialog.kind === "clear-rows"}
+        title="Vider la liste de débit"
+        message="Toutes les pièces de ce projet seront effacées. Le calepinage sera perdu jusqu’au prochain calcul."
+        actions={[
+          {
+            label: "Annuler",
+            variant: "ghost",
+            onClick: () => setDialog({ kind: "none" }),
+          },
+          {
+            label: "Vider la liste",
+            variant: "destructive",
+            onClick: () => {
+              setRows([emptyRow()]);
+              setResult(null);
+              setError(null);
               setDialog({ kind: "none" });
             },
           },

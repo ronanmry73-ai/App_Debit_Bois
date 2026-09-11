@@ -6,11 +6,15 @@ import {
   ensureStockArticle,
   exampleStock,
   hasShortage,
+  isPlaceholderDate,
   jobNeedFromQuote,
+  PLACEHOLDER_STOCK_DATE,
   restoreDeduction,
   stockStatus,
   stockValue,
+  stockValuePriced,
   toOrder,
+  unpricedStockCount,
 } from "./stock.ts";
 
 test("exemple stock : valeur et seuils", () => {
@@ -94,4 +98,27 @@ test("déduction enregistre l’historique et l’annulation restaure le stock",
   const back = restoreDeduction(out.items, out.moves, out.deduction!);
   assert.equal(back.ok, true);
   assert.equal(back.items.find((i) => i.id === "stock-panel-A")?.qty, 10);
+});
+
+test("dates placeholder / epoch ne s’affichent pas comme un vrai mouvement", () => {
+  assert.equal(isPlaceholderDate(undefined), true);
+  assert.equal(isPlaceholderDate(""), true);
+  assert.equal(isPlaceholderDate(PLACEHOLDER_STOCK_DATE), true);
+  assert.equal(isPlaceholderDate("1970-01-01T00:00:00.000Z"), true);
+  assert.equal(isPlaceholderDate("2026-03-12T14:30:00.000Z"), false);
+});
+
+test("valeur stock : articles sans prix exclus et comptés à part", () => {
+  const items = exampleStock().map((it, i) =>
+    i === 0 ? { ...it, unitCost: 0 } : it,
+  );
+  assert.equal(unpricedStockCount(items), 1);
+  const priced = stockValuePriced(items);
+  assert.ok(priced < stockValue(exampleStock()));
+  assert.equal(
+    priced,
+    items
+      .filter((it) => it.unitCost > 0)
+      .reduce((s, it) => s + it.qty * it.unitCost, 0),
+  );
 });

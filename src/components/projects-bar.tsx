@@ -90,9 +90,9 @@ export function ProjectsBar({
               <p className="mt-1 text-sm text-muted-foreground">
                 {current
                   ? `${current.name}${dirty ? " — modifications non enregistrées" : ""}`
-                  : dirty
-                    ? "Projet en cours, pas encore enregistré"
-                    : "Aucun projet ouvert"}
+                  : `${meta.name.trim() || "Sans titre"}${
+                      dirty ? " — modifications non enregistrées" : " — pas encore enregistré"
+                    }`}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">

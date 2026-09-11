@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { emptyRow, defaultQuoteIdentity } from "./presets.ts";
-import { migrateState } from "./persist.ts";
+import { migrateState, formatWindowTitle } from "./persist.ts";
 import type { AppSettings } from "./types.ts";
 
 function defaults() {
@@ -53,6 +53,7 @@ test("état vide ne crée pas de projet démo", () => {
   assert.equal(migrated.currentProjectId, null);
   assert.equal(migrated.catalog.refs.length, 2);
   assert.equal(migrated.stockDeduction, null);
+  assert.equal(migrated.workshopPrefs.companyName, "");
 });
 
 test("v5 conserve prix catalogue, stock atelier global et déduction", () => {
@@ -162,4 +163,18 @@ test("v5 conserve prix catalogue, stock atelier global et déduction", () => {
   assert.equal(migrated.projects[0]?.supplierSnapshot?.weightedPricePerM2, 18.5);
   assert.equal(migrated.stockDeduction?.id, "d1");
   assert.equal(migrated.projects[0]?.stockDeduction?.id, "d1");
+});
+
+test("titre fenêtre = nom du projet, puce si dirty", () => {
+  assert.equal(formatWindowTitle("", false), "Débit Bois — Sans titre");
+  assert.equal(formatWindowTitle("  ", true), "Débit Bois — Sans titre •");
+  assert.equal(formatWindowTitle("Étagère salon", false), "Débit Bois — Étagère salon");
+  assert.equal(formatWindowTitle("Étagère salon", true), "Débit Bois — Étagère salon •");
+});
+
+test("identité démo n’est pas copiée dans les préférences atelier", () => {
+  const d = defaults();
+  const migrated = migrateState({ settings: d.settings }, d);
+  assert.equal(migrated.workshopPrefs.companyName, "");
+  assert.equal(migrated.workshopPrefs.companyAddress, "");
 });

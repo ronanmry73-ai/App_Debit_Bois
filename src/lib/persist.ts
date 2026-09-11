@@ -5,6 +5,11 @@
 
 import { migrateCatalog, seedCatalog, type Catalog } from "./catalog.ts";
 import { desktopApi } from "./desktop.ts";
+import {
+  emptyWorkshopPrefs,
+  migrateWorkshopPrefs,
+  type WorkshopPrefs,
+} from "./presets.ts";
 import { snapshotProject, type Project } from "./projects.ts";
 import {
   exampleStock,
@@ -38,6 +43,7 @@ export type PersistedState = {
   selectedStrategy: string;
   usedRefIds: string[];
   stockDeduction: StockDeduction | null;
+  workshopPrefs: WorkshopPrefs;
 };
 
 export function emptyMeta(): ProjectMeta {
@@ -78,6 +84,7 @@ export function migrateState(
     selectedStrategy: "mixed",
     usedRefIds: [],
     stockDeduction: null,
+    workshopPrefs: emptyWorkshopPrefs(),
   };
   if (!raw || typeof raw !== "object") return base;
   const o = raw as Record<string, unknown>;
@@ -111,6 +118,7 @@ export function migrateState(
     o.stockDeduction && typeof o.stockDeduction === "object"
       ? (o.stockDeduction as StockDeduction)
       : null;
+  const workshopPrefs = migrateWorkshopPrefs(o.workshopPrefs, settings);
 
   const isV5 = o.version === 5;
   if (!isV5 && projects.length === 0 && rowsHaveWork(rows)) {
@@ -145,6 +153,7 @@ export function migrateState(
       typeof o.selectedStrategy === "string" ? o.selectedStrategy : "mixed",
     usedRefIds,
     stockDeduction,
+    workshopPrefs,
   };
 }
 
@@ -186,6 +195,23 @@ export async function savePersisted(state: PersistedState): Promise<void> {
     } catch {
       /* fichier indisponible */
     }
+  }
+}
+
+export function formatWindowTitle(name: string, dirty: boolean): string {
+  const label = name.trim() || "Sans titre";
+  const marked = dirty ? `${label} •` : label;
+  return `Débit Bois — ${marked}`;
+}
+
+export function applyWindowTitle(name: string, dirty: boolean): void {
+  const full = formatWindowTitle(name, dirty);
+  if (typeof document !== "undefined") {
+    document.title = full;
+  }
+  const desktop = desktopApi();
+  if (desktop?.setTitle) {
+    void desktop.setTitle(full);
   }
 }
 

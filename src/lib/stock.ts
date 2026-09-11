@@ -12,6 +12,7 @@ import { newId } from "./utils.ts";
 
 export const PANEL_A_ID = "stock-panel-A";
 export const PANEL_B_ID = "stock-panel-B";
+export const PLACEHOLDER_STOCK_DATE = "2024-01-01T00:00:00.000Z";
 
 export type StockKind = "panel-A" | "panel-B" | "hardware" | "other";
 
@@ -119,6 +120,25 @@ export function stockStatus(item: StockItem): StockStatus {
 
 export function stockValue(items: StockItem[]): number {
   return items.reduce((s, it) => s + Math.max(0, it.qty) * Math.max(0, it.unitCost), 0);
+}
+
+/** Articles sans coût unitaire : exclus de la valeur, à marquer à l’écran. */
+export function unpricedStockCount(items: StockItem[]): number {
+  return items.filter((it) => !(it.unitCost > 0)).length;
+}
+
+export function stockValuePriced(items: StockItem[]): number {
+  return items
+    .filter((it) => it.unitCost > 0)
+    .reduce((s, it) => s + Math.max(0, it.qty) * it.unitCost, 0);
+}
+
+export function isPlaceholderDate(iso?: string): boolean {
+  if (!iso || !iso.trim()) return true;
+  if (iso === PLACEHOLDER_STOCK_DATE) return true;
+  if (iso.startsWith("1970-01-01")) return true;
+  const t = Date.parse(iso);
+  return !Number.isFinite(t) || t <= 0;
 }
 
 export function stockSurfaceM2(item: StockItem): number {
@@ -487,7 +507,7 @@ export function ensureStockArticle(
 }
 
 export function exampleStock(): StockItem[] {
-  const t = "2024-01-01T00:00:00.000Z";
+  const t = PLACEHOLDER_STOCK_DATE;
   return [
     {
       id: PANEL_A_ID,

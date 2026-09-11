@@ -9,11 +9,9 @@ import {
   laborCost,
   type SellingResult,
 } from "@/lib/pricing";
-import type { AppSettings, HardwareItem } from "@/lib/types";
-import type { PanelSpec, StrategyResult } from "@/lib/packing";
-import type { StockItem } from "@/lib/stock";
+import type { AppSettings } from "@/lib/types";
+import type { StrategyResult } from "@/lib/packing";
 import type { SupplierCost } from "@/lib/supplier";
-import { coverage, jobNeedFromQuote, toOrder } from "@/lib/stock";
 import { formatArea, formatEuro, formatPct } from "@/lib/utils";
 
 type Props = {
@@ -22,8 +20,7 @@ type Props = {
   selling: SellingResult;
   strategy: StrategyResult;
   supplier: SupplierCost | null;
-  stock?: StockItem[];
-  specs?: PanelSpec[];
+  onPrint?: () => void;
 };
 
 export function QuoteDocument({
@@ -32,7 +29,7 @@ export function QuoteDocument({
   selling,
   strategy,
   supplier,
-  stock = [],
+  onPrint,
 }: Props) {
   const hw = hardwareLines(settings.hardwareItems).filter(
     (l) => l.name || l.qty > 0 || l.unitPrice > 0,
@@ -151,13 +148,10 @@ export function QuoteDocument({
         </QuoteTable>
         <p className="mt-2 text-xs text-muted-foreground">
           Surface utile {formatArea(strategy.usedArea)} · Surface achetée{" "}
-          {formatArea(strategy.purchasedArea)} · Chute du plan{" "}
-          {formatPct(strategy.wastePercent)}
-          {selling.ok ? ` · Taux de perte devis ${formatPct(selling.wastePct)}` : ""}
+          {formatArea(strategy.purchasedArea)}
           {selling.ok
             ? ` · Prix moyen ${formatEuro(selling.pricePerM2)}/m²`
             : " · Prix incomplet"}
-          {stockNote(stock, strategy.counts, settings.hardwareItems)}
         </p>
 
         <QuoteTable title="2. Quincaillerie et fournitures">
@@ -269,9 +263,9 @@ export function QuoteDocument({
       </article>
 
       <div className="no-print mt-3 flex justify-end">
-        <Button type="button" onClick={() => window.print()}>
+        <Button type="button" onClick={() => (onPrint ? onPrint() : window.print())}>
           <Printer />
-          Imprimer / Exporter en PDF
+          PDF client
         </Button>
       </div>
     </section>
@@ -300,6 +294,7 @@ function IdentityForm({
           label="Nom de l’entreprise"
           value={settings.companyName}
           onChange={(companyName) => onChange({ companyName })}
+          placeholder="Nom de l’atelier"
         />
         <div>
           <Label htmlFor="co-logo">Logo (optionnel)</Label>
@@ -362,6 +357,7 @@ function IdentityForm({
           label="Nom du client"
           value={settings.clientName}
           onChange={(clientName) => onChange({ clientName })}
+          placeholder="M. et Mme Martin"
         />
         <div>
           <Label htmlFor="q-date">Date du devis</Label>
@@ -385,6 +381,7 @@ function IdentityForm({
             id="q-desc"
             className="mt-1.5"
             value={settings.furnitureDescription}
+            placeholder="Étagère salon"
             onChange={(e) =>
               onChange({ furnitureDescription: e.target.value })
             }
@@ -442,11 +439,13 @@ function TextField({
   label,
   value,
   onChange,
+  placeholder,
 }: {
   id: string;
   label: string;
   value: string;
   onChange: (v: string) => void;
+  placeholder?: string;
 }) {
   return (
     <div>
@@ -455,6 +454,7 @@ function TextField({
         id={id}
         className="mt-1.5"
         value={value}
+        placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
       />
     </div>
@@ -514,23 +514,6 @@ function DefaultMark() {
       <rect x="7" y="28" width="16" height="5" rx="1.5" fill="#e7dfd2" />
     </svg>
   );
-}
-
-function stockNote(
-  stock: StockItem[],
-  counts: Record<string, number>,
-  hardware: HardwareItem[],
-): string {
-  if (stock.length === 0) return "";
-  const lines = coverage(stock, jobNeedFromQuote(counts, hardware)).filter(
-    (l) => l.needed > 0,
-  );
-  if (lines.length === 0) return "";
-  const miss = toOrder(lines);
-  if (miss.length > 0) {
-    return ` · Stock : à commander ${miss.map((m) => `${m.name} ×${m.qty}`).join(", ")}`;
-  }
-  return " · Stock atelier : besoin couvert";
 }
 
 function formatQuoteDate(iso: string): string {

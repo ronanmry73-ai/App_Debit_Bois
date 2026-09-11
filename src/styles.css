@@ -129,11 +129,20 @@
     display: none !important;
   }
 
-  .quote-sheet {
+  .quote-sheet,
+  .atelier-sheet {
     box-shadow: none !important;
     border-radius: 0 !important;
     padding: 0 !important;
     background: white !important;
+  }
+
+  body.print-atelier .quote-sheet {
+    display: none !important;
+  }
+
+  body.print-client .atelier-sheet {
+    display: none !important;
   }
 }
 

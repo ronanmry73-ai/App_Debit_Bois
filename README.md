@@ -1,6 +1,6 @@
 # Débit Bois
 
-Calculateur de débit de panneaux (références paramétrables, formats d’origine 2500 × 400 mm et 2500 × 600 mm conservés), plans de découpe, devis HT/TTC, stocks atelier et projets locaux. Tout tourne hors ligne : débit, prix, catalogue et projets sont enregistrés en `localStorage` (et, sous Electron, dans un fichier du dossier userData). Pas de compte, pas de base distante.
+Calculateur de débit de panneaux (références paramétrables, formats d’origine 2500 × 400 mm et 2500 × 600 mm conservés), plans de découpe, devis HT/TTC, stocks atelier et projets locaux. Trois modes : **Atelier** (plans et fiche PDF), **Stock**, **Devis** (PDF client). Le projet est un fichier : nouveau / ouvrir / enregistrer. Tout tourne hors ligne : débit, prix, catalogue et projets sont enregistrés en `localStorage` (et, sous Electron, dans un fichier du dossier userData). Pas de compte, pas de base distante.
 
 ## Lancer en local
 
@@ -57,4 +57,4 @@ Aucune variable d’environnement n’est nécessaire. Le build est `npm run bui
 | `electron/` | Coque desktop (Electron) |
 | `public/og.jpg` | Image de partage |
 
-Unités en millimètres. Impression / PDF via le navigateur ou `Ctrl+P` dans Electron.
+Unités en millimètres. Deux sorties PDF distinctes : fiche atelier (plans) et devis client. Impression via le navigateur ou `Ctrl+P` dans Electron.

@@ -5,6 +5,7 @@ export type DebitBoisDesktop = {
   writeStore: (json: string) => Promise<boolean>;
   exportFile: (suggestedName: string, content: string) => Promise<boolean>;
   importFile: () => Promise<string | null>;
+  setTitle?: (title: string) => Promise<boolean>;
 };
 
 export function desktopApi(): DebitBoisDesktop | null {
