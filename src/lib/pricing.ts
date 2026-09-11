@@ -1,34 +1,23 @@
 /**
  * Prix de vente du meuble (matière valorisée + MO + quincaillerie + marge).
  *
- * Formule :
- *   1. Prix_m²_réel   = Prix_achat_m² / (1 − Taux_perte / 100)
- *   2. Coût_matière   = Surface_m²_nécessaire × Prix_m²_réel
- *   3. Coût_MO        = Temps_h × Taux_horaire
- *   4. Coût_quincaillerie = Σ (qté × prix unitaire)
- *   5. Coût_revient   = Coût_matière + Coût_MO + Coût_quincaillerie
- *   6. Prix_vente_HT  = Coût_revient / (1 − Marge% / 100)
- *   7. TVA            = Prix_vente_HT × Taux_TVA / 100
- *   8. Prix_vente_TTC = Prix_vente_HT + TVA
+ * ACHAT = mécanique (p_moyen × S_achetée), voir supplier.ts.
+ * VENTE = jugement : τ est saisi par l’utilisateur.
  *
- * ------------------------------------------------------------------
- * Exemple chiffré :
+ *   p_valorisé = p_moyen / (1 − τ/100)
+ *   C_matière  = S_utile × p_valorisé
  *
- *   Prix d'achat fournisseur : 40 €/m²
- *   Surface nécessaire       : 2 m²
- *   Taux de perte            : 15 %
- *   Main d'œuvre             : 2,5 h × 40 €/h = 100 €
- *   Quincaillerie            : 4 × 4,50 € + 2 × 6,00 € = 30 €
- *   Marge souhaitée          : 30 %
+ *   τ = chute du plan  → C_matière ≈ C_achat = p_moyen × S_achetée
+ *   τ < chute du plan  → C_matière < C_achat (chute réutilisable)
+ *   τ > chute du plan  → C_matière > C_achat (chute morte / fil)
  *
- *   Prix réel/m²   = 40 / 0,85 = 47,06 €
- *   Coût matière   = 2 × 47,06 = 94,12 €
- *   Coût de revient = 94,12 + 100 + 30 = 224,12 €
- *   Prix de vente HT = 224,12 / 0,70 = 320,17 €
- *   Marge          = 320,17 − 224,12 = 96,05 €
- *   TVA 20 %       = 64,03 €
- *   Prix TTC       = 384,20 €
- * ------------------------------------------------------------------
+ * Puis :
+ *   C_revient = C_matière + MO + quincaillerie
+ *   HT        = C_revient / (1 − marge/100)
+ *
+ * p_moyen et les lignes d’achat viennent du catalogue (prix PAR référence).
+ * Aucun tarif unique inventé. Si une référence consommée n’a pas de prix,
+ * C_matière / C_achat restent incomplets.
  */
 
 import { DEFAULT_SPECS, type PanelSpec, type StrategyResult } from "./packing.ts";
@@ -61,6 +50,8 @@ export type SellingOk = {
 export type SellingErr = {
   ok: false;
   error: string;
+  /** Prix catalogue manquant : aucun euro n’est inventé. */
+  incomplete?: boolean;
 };
 
 export type SellingResult = SellingOk | SellingErr;
@@ -79,8 +70,9 @@ export type PanelBuyLine = {
   dims: string;
   qty: number;
   areaM2: number;
-  unitPrice: number;
-  subtotal: number;
+  pricePerM2: number | null;
+  unitPrice: number | null;
+  subtotal: number | null;
 };
 
 export function parseAmount(s: string | number): number {
@@ -112,41 +104,66 @@ export function sumHardware(items: HardwareItem[]): number {
   );
 }
 
+/** Chute du plan τ% = 100 × (1 − S_utile / S_achetée). */
+export function planWastePct(usefulM2: number, purchasedM2: number): number {
+  if (!(purchasedM2 > 0)) return 0;
+  return roundCents(100 * Math.max(0, 1 - usefulM2 / purchasedM2));
+}
+
+/**
+ * Lignes d’achat : un prix par référence (catalogue), jamais un tarif unique.
+ * subtotal null si le prix de la référence manque.
+ */
 export function panelBuyLines(
   counts: Record<string, number>,
-  pricePerM2: number,
   specs: PanelSpec[] = DEFAULT_SPECS,
 ): PanelBuyLine[] {
-  const price = Math.max(0, pricePerM2);
   const out: PanelBuyLine[] = [];
+  const seen = new Set<string>();
   for (const spec of specs) {
     const qty = counts[spec.id] ?? 0;
     if (qty <= 0) continue;
-    const areaM2 = (spec.length * spec.width) / 1_000_000;
-    const unitPrice = roundCents(areaM2 * price);
+    seen.add(spec.id);
+    const areaOne = (spec.length * spec.width) / 1_000_000;
+    const areaM2 = areaOne * qty;
+    const price = spec.pricePerM2 != null && spec.pricePerM2 > 0 ? spec.pricePerM2 : null;
+    const unitPrice = price != null ? roundCents(areaOne * price) : null;
     out.push({
       format: spec.id,
       label: `Panneau ${spec.label}`,
       dims: `${spec.length} × ${spec.width} mm`,
       qty,
       areaM2,
+      pricePerM2: price,
       unitPrice,
-      subtotal: roundCents(qty * unitPrice),
+      subtotal: unitPrice != null ? roundCents(qty * unitPrice) : null,
     });
   }
   for (const [id, qty] of Object.entries(counts)) {
-    if (qty <= 0 || specs.some((s) => s.id === id)) continue;
+    if (qty <= 0 || seen.has(id)) continue;
     out.push({
       format: id,
       label: `Panneau ${id}`,
       dims: id,
       qty,
       areaM2: 0,
-      unitPrice: 0,
-      subtotal: 0,
+      pricePerM2: null,
+      unitPrice: null,
+      subtotal: null,
     });
   }
   return out;
+}
+
+/** Total d’achat de la stratégie, ou null si un prix manque. */
+export function packPurchaseTotal(
+  strategy: StrategyResult,
+  specs: PanelSpec[] = DEFAULT_SPECS,
+): number | null {
+  const lines = panelBuyLines(strategy.counts, specs);
+  if (lines.length === 0) return 0;
+  if (lines.some((l) => l.subtotal == null)) return null;
+  return roundCents(lines.reduce((s, l) => s + (l.subtotal ?? 0), 0));
 }
 
 export function applyVat(
@@ -227,10 +244,15 @@ export function sellingFromInputs(
   });
 }
 
-export function packPurchaseTotal(strategy: StrategyResult, pricePerM2: number): number {
-  return roundCents(
-    panelBuyLines(strategy.counts, pricePerM2).reduce((s, l) => s + l.subtotal, 0),
-  );
+export const INCOMPLETE_PRICE_ERROR =
+  "Prix incomplet : renseignez le prix au m² de chaque référence consommée.";
+
+export function incompleteSelling(): SellingErr {
+  return {
+    ok: false,
+    incomplete: true,
+    error: INCOMPLETE_PRICE_ERROR,
+  };
 }
 
 export function roundCents(n: number): number {

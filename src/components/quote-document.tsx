@@ -7,20 +7,21 @@ import {
   applyVat,
   hardwareLines,
   laborCost,
-  panelBuyLines,
-  type SellingOk,
+  type SellingResult,
 } from "@/lib/pricing";
 import type { AppSettings, HardwareItem } from "@/lib/types";
 import type { PanelSpec, StrategyResult } from "@/lib/packing";
 import type { StockItem } from "@/lib/stock";
+import type { SupplierCost } from "@/lib/supplier";
 import { coverage, jobNeedFromQuote, toOrder } from "@/lib/stock";
 import { formatArea, formatEuro, formatPct } from "@/lib/utils";
 
 type Props = {
   settings: AppSettings;
   onChange: (patch: Partial<AppSettings>) => void;
-  selling: SellingOk;
+  selling: SellingResult;
   strategy: StrategyResult;
+  supplier: SupplierCost | null;
   stock?: StockItem[];
   specs?: PanelSpec[];
 };
@@ -30,16 +31,18 @@ export function QuoteDocument({
   onChange,
   selling,
   strategy,
+  supplier,
   stock = [],
-  specs,
 }: Props) {
-  const panels = panelBuyLines(strategy.counts, settings.pricePerM2, specs);
   const hw = hardwareLines(settings.hardwareItems).filter(
     (l) => l.name || l.qty > 0 || l.unitPrice > 0,
   );
+  const hwTotal = hw.reduce((s, l) => s + l.subtotal, 0);
   const mo = laborCost(settings.laborHours, settings.hourlyRate);
-  const vat = applyVat(selling.prixVente, settings.vatPct);
+  const incomplete = !selling.ok;
+  const vat = selling.ok ? applyVat(selling.prixVente, settings.vatPct) : null;
   const dateLabel = formatQuoteDate(settings.quoteDate);
+  const lines = supplier?.lines ?? [];
 
   return (
     <section aria-labelledby="quote-sheet-title">
@@ -108,29 +111,39 @@ export function QuoteDocument({
           </div>
         </div>
 
-        <QuoteTable title="1. Matière première — panneaux à acheter">
+        <QuoteTable title="1. Matière première — panneaux consommés">
           <thead>
             <tr>
               <th>Référence</th>
               <th>Dimensions</th>
               <th className="num">Qté</th>
-              <th className="num">Prix unit.</th>
-              <th className="num">Sous-total</th>
+              <th className="num">Surface</th>
+              <th className="num">Prix €/m²</th>
             </tr>
           </thead>
           <tbody>
-            {panels.length === 0 ? (
+            {lines.length === 0 ? (
               <tr>
                 <td colSpan={5}>Aucun panneau</td>
               </tr>
             ) : (
-              panels.map((p) => (
-                <tr key={p.format}>
-                  <td>{p.label}</td>
-                  <td>{p.dims}</td>
+              lines.map((p) => (
+                <tr key={p.specId}>
+                  <td>Panneau {p.name}</td>
+                  <td>
+                    {p.length} × {p.width} mm
+                  </td>
                   <td className="num">{p.qty}</td>
-                  <td className="num">{formatEuro(p.unitPrice)}</td>
-                  <td className="num">{formatEuro(p.subtotal)}</td>
+                  <td className="num">
+                    {p.areaM2.toLocaleString("fr-FR", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}{" "}
+                    m²
+                  </td>
+                  <td className="num">
+                    {p.pricePerM2 != null ? formatEuro(p.pricePerM2) : "—"}
+                  </td>
                 </tr>
               ))
             )}
@@ -139,8 +152,11 @@ export function QuoteDocument({
         <p className="mt-2 text-xs text-muted-foreground">
           Surface utile {formatArea(strategy.usedArea)} · Surface achetée{" "}
           {formatArea(strategy.purchasedArea)} · Chute du plan{" "}
-          {formatPct(strategy.wastePercent)} · Taux de perte devis{" "}
-          {formatPct(selling.wastePct)}
+          {formatPct(strategy.wastePercent)}
+          {selling.ok ? ` · Taux de perte devis ${formatPct(selling.wastePct)}` : ""}
+          {selling.ok
+            ? ` · Prix moyen ${formatEuro(selling.pricePerM2)}/m²`
+            : " · Prix incomplet"}
           {stockNote(stock, strategy.counts, settings.hardwareItems)}
         </p>
 
@@ -172,7 +188,7 @@ export function QuoteDocument({
           <tfoot>
             <tr>
               <td colSpan={3}>Total quincaillerie</td>
-              <td className="num">{formatEuro(selling.hardware)}</td>
+              <td className="num">{formatEuro(hwTotal)}</td>
             </tr>
           </tfoot>
         </QuoteTable>
@@ -201,21 +217,48 @@ export function QuoteDocument({
             4. Récapitulatif
           </h3>
           <dl className="mt-3 text-sm">
-            <Row label="Coût matière (perte compensée)" value={formatEuro(selling.coutMatiere)} />
-            <Row label="Quincaillerie" value={formatEuro(selling.hardware)} />
-            <Row label="Main d’œuvre" value={formatEuro(selling.labor)} />
-            <Row label="Coût de revient" value={formatEuro(selling.coutRevient)} />
             <Row
-              label={`Marge (${formatPct(selling.marginPct)})`}
-              value={formatEuro(selling.margeEuros)}
+              label="Coût matière"
+              value={
+                selling.ok ? formatEuro(selling.coutMatiere) : "prix incomplet"
+              }
             />
-            <Row label="Prix de vente HT" value={formatEuro(selling.prixVente)} strong />
             <Row
-              label={`TVA (${formatPct(settings.vatPct)})`}
-              value={formatEuro(vat.tva)}
+              label="Quincaillerie"
+              value={formatEuro(hwTotal)}
             />
-            <Row label="Prix de vente TTC" value={formatEuro(vat.ttc)} total />
+            <Row label="Main d’œuvre" value={formatEuro(mo)} />
+            {selling.ok ? (
+              <>
+                <Row label="Coût de revient" value={formatEuro(selling.coutRevient)} />
+                <Row
+                  label={`Marge (${formatPct(selling.marginPct)})`}
+                  value={formatEuro(selling.margeEuros)}
+                />
+                <Row label="Prix de vente HT" value={formatEuro(selling.prixVente)} strong />
+                {vat && (
+                  <>
+                    <Row
+                      label={`TVA (${formatPct(settings.vatPct)})`}
+                      value={formatEuro(vat.tva)}
+                    />
+                    <Row label="Prix de vente TTC" value={formatEuro(vat.ttc)} total />
+                  </>
+                )}
+              </>
+            ) : (
+              <Row
+                label="Prix de vente"
+                value="prix incomplet"
+                total
+              />
+            )}
           </dl>
+          {incomplete && (
+            <p className="mt-3 text-xs text-destructive">
+              {selling.error} Aucun euro n’est inventé pour la matière.
+            </p>
+          )}
         </div>
 
         <footer className="mt-8 space-y-2 border-t border-border pt-4 text-sm text-ink-soft">
@@ -248,8 +291,8 @@ function IdentityForm({
         En-tête du devis
       </h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Ces informations apparaissent sur le document. Elles ne sont pas
-        réimprimées ici, seulement dans le devis ci-dessous.
+        Le client est celui du projet. Ces informations apparaissent sur le
+        document.
       </p>
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <TextField

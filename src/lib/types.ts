@@ -38,9 +38,21 @@ export type AppSettings = QuoteIdentity & {
   kerf: number;
   allowRotation: boolean;
   method: PackMethod;
-  pricePerM2: number;
+  /**
+   * Override optionnel du prix d’achat €/m².
+   * Source réelle = p_moyen fournisseur (surfaces achetées), sauf
+   * si `forcePricePerM2` est vrai.
+   */
+  pricePerM2: number | null;
+  /** Si vrai, `pricePerM2` remplace p_moyen. */
+  forcePricePerM2?: boolean;
+  /**
+   * Taux de perte / chute τ, manuel.
+   * 0 tant qu’il n’y a pas de plan ; prérempli à la chute du plan.
+   */
   wastePct: number;
   marginPct: number;
+  /** Override manuel de la surface utile (m²). null = pièces du plan. */
   surfaceOverrideM2: number | null;
   laborHours: number;
   hourlyRate: number;

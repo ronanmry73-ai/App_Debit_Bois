@@ -7,7 +7,6 @@ import { formatEuro } from "@/lib/utils";
 type Props = {
   live: SupplierCost | null;
   snapshot: SupplierCost | null;
-  onApplyToQuote?: (pricePerM2: number) => void;
   onEditPrices?: () => void;
 };
 
@@ -18,7 +17,6 @@ function areaLabel(n: number): string {
 export function SupplierCostPanel({
   live,
   snapshot,
-  onApplyToQuote,
   onEditPrices,
 }: Props) {
   const cost = live;
@@ -40,8 +38,9 @@ export function SupplierCostPanel({
             Achat fournisseur
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Moyenne pondérée par la surface des panneaux consommés : Σ (surface ×
-            prix) / Σ surface. Ce n’est pas une moyenne des tarifs catalogue.
+            Moyenne pondérée par la surface achetée : Σ (surface × prix) / Σ
+            surface. Ce n’est pas une moyenne des tarifs catalogue. Ce prix
+            alimente le devis.
           </p>
 
           {cost.missing.length > 0 && (
@@ -101,7 +100,7 @@ export function SupplierCostPanel({
 
           <dl className="mt-4 grid gap-3 sm:grid-cols-3 text-sm">
             <div>
-              <dt className="text-muted-foreground">Surface totale consommée</dt>
+              <dt className="text-muted-foreground">Surface achetée</dt>
               <dd className="font-medium tabular-nums">{areaLabel(cost.totalAreaM2)}</dd>
             </div>
             <div>
@@ -115,22 +114,10 @@ export function SupplierCostPanel({
             <div>
               <dt className="text-muted-foreground">Total achat fournisseur</dt>
               <dd className="font-medium tabular-nums">
-                {cost.totalCost != null ? formatEuro(cost.totalCost) : "—"}
+                {cost.totalCost != null ? formatEuro(cost.totalCost) : "prix incomplet"}
               </dd>
             </div>
           </dl>
-
-          {cost.weightedPricePerM2 != null && onApplyToQuote && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-4"
-              onClick={() => onApplyToQuote(cost.weightedPricePerM2!)}
-            >
-              Appliquer ce prix moyen au devis
-            </Button>
-          )}
 
           {historic && snapshot && (
             <div className="mt-4 rounded-lg bg-muted/70 px-3 py-3 text-sm">

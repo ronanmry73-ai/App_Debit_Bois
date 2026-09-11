@@ -15,7 +15,7 @@ export function exampleRows(): PieceRow[] {
   ];
 }
 
-/** Débit de 2 m² (2 × 2500 × 400) pour l’exemple devis 40 €/m². */
+/** Débit de 2 m² (2 × 2500 × 400) pour le jeu d’exemple devis. */
 export function exampleQuoteRows(): PieceRow[] {
   return [
     { id: "q-1", name: "Tablette", length: "2500", width: "400", qty: "2" },
@@ -47,6 +47,7 @@ export function exampleHardwareItems(): HardwareItem[] {
   ];
 }
 
+/** Identité atelier + client d’exemple — jeu chargeable, pas un projet neuf. */
 export function defaultQuoteIdentity(): QuoteIdentity {
   const year = new Date().getFullYear();
   const today = new Date().toISOString().slice(0, 10);
@@ -68,16 +69,27 @@ export function defaultQuoteIdentity(): QuoteIdentity {
   };
 }
 
+/** Atelier par défaut, client vide — c’est l’état d’un projet neuf. */
+export function blankProjectIdentity(): QuoteIdentity {
+  return {
+    ...defaultQuoteIdentity(),
+    clientName: "",
+    furnitureDescription: "",
+  };
+}
+
 export const METHOD_OPTIONS = [
   { value: "auto", label: "Automatique (meilleur rendement)" },
   { value: "guillotine", label: "Guillotine (coupes droites)" },
   { value: "maxrects", label: "Rectangles maximaux (densité)" },
 ] as const;
 
+/** Jeu d’exemple chargeable (formule 40 € / 15 % / 2 m²), pas les défauts d’un projet neuf. */
 export function exampleQuotePatch(): Partial<AppSettings> {
   return {
     ...defaultQuoteIdentity(),
     pricePerM2: 40,
+    forcePricePerM2: true,
     wastePct: 15,
     laborHours: 2.5,
     hourlyRate: 40,

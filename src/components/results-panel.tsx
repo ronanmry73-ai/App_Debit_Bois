@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { PanelSpec, StrategyId, StrategyResult } from "@/lib/packing";
 import { findPanel, type StockItem } from "@/lib/stock";
+import { supplierCostFromCounts, type SupplierCost } from "@/lib/supplier";
 import { formatArea, formatEuro, formatPct, cn } from "@/lib/utils";
 
 type Props = {
@@ -10,7 +11,6 @@ type Props = {
   selected: StrategyId;
   bestId: StrategyId;
   onSelect: (id: StrategyId) => void;
-  pricePerM2: number;
   stock?: StockItem[];
   specs?: PanelSpec[];
 };
@@ -23,12 +23,15 @@ function specLabel(id: string, specs: PanelSpec[]): string {
   return specs.find((s) => s.id === id)?.label ?? id;
 }
 
+function costOf(s: StrategyResult, specs: PanelSpec[]): SupplierCost {
+  return supplierCostFromCounts(s.counts, specs);
+}
+
 export function ResultsPanel({
   strategies,
   selected,
   bestId,
   onSelect,
-  pricePerM2,
   stock = [],
   specs = [],
 }: Props) {
@@ -42,7 +45,8 @@ export function ResultsPanel({
           Comparaison des stratégies
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Objectif : minimiser la surface de panneaux achetée.
+          Objectif : minimiser la surface de panneaux achetée. L’achat affiché
+          est le coût fournisseur de cette stratégie.
         </p>
       </div>
 
@@ -50,7 +54,7 @@ export function ResultsPanel({
         {strategies.map((s) => {
           const isBest = s.id === bestId;
           const isSel = s.id === selected;
-          const achat = (s.purchasedArea / 1_000_000) * pricePerM2;
+          const cost = costOf(s, specs);
           const total = countTotal(s.counts);
           const mix = Object.entries(s.counts)
             .filter(([, n]) => n > 0)
@@ -94,7 +98,13 @@ export function ResultsPanel({
                 </div>
                 <div className="col-span-2">
                   <dt className="text-muted-foreground">Achat panneaux</dt>
-                  <dd className="tabular-nums font-medium">{formatEuro(achat)}</dd>
+                  <dd className="tabular-nums font-medium">
+                    {total === 0
+                      ? "—"
+                      : cost.totalCost != null
+                        ? formatEuro(cost.totalCost)
+                        : "— prix incomplet"}
+                  </dd>
                 </div>
               </dl>
               {s.unplaced.length > 0 && (

@@ -1,13 +1,14 @@
 /**
  * Coût d’achat fournisseur d’un débit : moyenne pondérée par la surface
- * des panneaux réellement consommés (quantité × L × l), pas une moyenne
- * arithmétique des prix catalogue.
+ * des panneaux réellement achetés (quantité × L × l), pas une moyenne
+ * arithmétique des tarifs catalogue.
  *
- *   Prix_moyen = Σ (surface_réf × prix_réf) / Σ surface_réf
- *   Prix_total = Σ (surface_réf × prix_réf)
+ *   p_moyen = Σ (S_i_achetée × p_i) / Σ S_i_achetée
+ *   C_achat = p_moyen × S_achetée  = Σ (S_i_achetée × p_i)
  */
 
 import type { PanelSpec } from "./catalog.ts";
+import type { AppSettings } from "./types.ts";
 import { roundCents } from "./pricing.ts";
 
 export type SupplierLine = {
@@ -96,6 +97,21 @@ export function supplierCostFromCounts(
     missing,
     calculatedAt,
   };
+}
+
+/** Prix d’achat à utiliser au devis : p_moyen live, sauf override forcé. */
+export function effectivePurchasePrice(
+  live: SupplierCost | null,
+  settings: Pick<AppSettings, "pricePerM2" | "forcePricePerM2">,
+): number | null {
+  if (
+    settings.forcePricePerM2 &&
+    settings.pricePerM2 != null &&
+    settings.pricePerM2 > 0
+  ) {
+    return settings.pricePerM2;
+  }
+  return live?.weightedPricePerM2 ?? null;
 }
 
 export function snapshotDiffers(

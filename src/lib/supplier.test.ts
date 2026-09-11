@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parsePriceInput, createRef, seedCatalog, packingSpecs, updateRef } from "./catalog.ts";
-import { supplierCostFromCounts } from "./supplier.ts";
+import {
+  effectivePurchasePrice,
+  supplierCostFromCounts,
+} from "./supplier.ts";
 
 test("saisie prix : vide, virgule, négatif, non numérique", () => {
   assert.deepEqual(parsePriceInput(""), { ok: true, value: null });
@@ -12,7 +15,7 @@ test("saisie prix : vide, virgule, négatif, non numérique", () => {
   assert.deepEqual(parsePriceInput(20), { ok: true, value: 20 });
 });
 
-test("moyenne pondérée 4 m² à 20 € et 2 m² à 30 € → 23,33 €/m²", () => {
+test("moyenne pondérée 4 m² à 20 € et 2 m² à 30 € → 23,33 €/m², pas (20+30)/2", () => {
   const specs = [
     {
       id: "A",
@@ -40,6 +43,7 @@ test("moyenne pondérée 4 m² à 20 € et 2 m² à 30 € → 23,33 €/m²", 
   assert.equal(cost.lines.find((l) => l.specId === "B")?.cost, 60);
   assert.equal(cost.totalCost, 140);
   assert.equal(cost.weightedPricePerM2, 23.33);
+  assert.notEqual(cost.weightedPricePerM2, 25);
   assert.equal(cost.missing.length, 0);
 });
 
@@ -50,6 +54,15 @@ test("référence sans prix : pas d’invention, liste les manquants", () => {
   assert.equal(cost.weightedPricePerM2, null);
   assert.ok(cost.missing.some((m) => m.specId === "A"));
   assert.ok(cost.missing.some((m) => m.specId === "B"));
+});
+
+test("prix catalogue courant : packingSpecs relit le tarif après édition", () => {
+  let cat = seedCatalog();
+  cat = updateRef(cat, "B", { pricePerM2: 35 }).catalog;
+  const cost = supplierCostFromCounts({ B: 1 }, packingSpecs(cat));
+  assert.equal(cost.missing.length, 0);
+  assert.equal(cost.weightedPricePerM2, 35);
+  assert.equal(cost.totalCost, 52.5);
 });
 
 test("modifier le prix catalogue ne change pas un instantané déjà calculé", () => {
@@ -73,4 +86,14 @@ test("créer une référence avec prix 18,50 €/m²", () => {
   });
   assert.equal(out.error, undefined);
   assert.equal(out.ref?.pricePerM2, 18.5);
+});
+
+test("prix effectif : p_moyen live, override seulement si forcé", () => {
+  const live = supplierCostFromCounts(
+    { B: 1 },
+    packingSpecs(updateRef(seedCatalog(), "B", { pricePerM2: 35 }).catalog),
+  );
+  assert.equal(effectivePurchasePrice(live, { pricePerM2: 40, forcePricePerM2: false }), 35);
+  assert.equal(effectivePurchasePrice(live, { pricePerM2: 40, forcePricePerM2: true }), 40);
+  assert.equal(effectivePurchasePrice(null, { pricePerM2: 40, forcePricePerM2: false }), null);
 });

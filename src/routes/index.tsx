@@ -29,7 +29,7 @@ import {
   type PieceDef,
   type StrategyId,
 } from "@/lib/packing";
-import { sellingFromInputs } from "@/lib/pricing";
+import { incompleteSelling, planWastePct, sellingFromInputs } from "@/lib/pricing";
 import {
   ensureStockArticle,
   exampleStock,
@@ -42,7 +42,7 @@ import {
 import {
   emptyRow,
   INITIAL_EMPTY_ROW,
-  defaultQuoteIdentity,
+  blankProjectIdentity,
 } from "@/lib/presets";
 import {
   packingSpecs,
@@ -69,17 +69,18 @@ import {
   type ProjectMeta,
 } from "@/lib/persist";
 import type { AppSettings, PieceRow } from "@/lib/types";
-import { supplierCostFromCounts } from "@/lib/supplier";
+import { effectivePurchasePrice, supplierCostFromCounts } from "@/lib/supplier";
 
 export const Route = createFileRoute("/")({ component: Home });
 
 const DEFAULT_SETTINGS: AppSettings = {
-  ...defaultQuoteIdentity(),
+  ...blankProjectIdentity(),
   kerf: 3,
   allowRotation: true,
   method: "auto",
-  pricePerM2: 40,
-  wastePct: 15,
+  pricePerM2: null,
+  forcePricePerM2: false,
+  wastePct: 0,
   marginPct: 20,
   surfaceOverrideM2: null,
   laborHours: 0,
@@ -163,6 +164,8 @@ function Home() {
   const [promptValue, setPromptValue] = useState("");
   const [tab, setTab] = useState<AppTab>("projet");
   const skipNextPack = useRef(false);
+  const skipWastePrefill = useRef(true);
+  const lastPlanId = useRef("");
 
   const liveFp = useMemo(
     () => fpOf({ rows, settings, selected, meta: projectMeta }),
@@ -323,6 +326,8 @@ function Home() {
   }, [flash]);
 
   function calculate() {
+    skipWastePrefill.current = false;
+    lastPlanId.current = "";
     const defs = parseRows(rows, catalog);
     if (defs.length === 0) {
       setResult(null);
@@ -365,22 +370,35 @@ function Home() {
     [result, selected],
   );
 
+  const liveSupplier = useMemo(
+    () =>
+      current
+        ? supplierCostFromCounts(current.counts, packingSpecs(catalog, Object.keys(current.counts)))
+        : null,
+    [current, catalog],
+  );
+
   const autoSurfaceM2 = current ? current.usedArea / 1_000_000 : 0;
+  const purchasedAreaM2 = current ? current.purchasedArea / 1_000_000 : 0;
+  const tauPlan = planWastePct(autoSurfaceM2, purchasedAreaM2);
   const surfaceM2 = settings.surfaceOverrideM2 ?? autoSurfaceM2;
+  const purchasePrice = effectivePurchasePrice(liveSupplier, settings);
   const selling = useMemo(
     () =>
-      sellingFromInputs(
-        surfaceM2,
-        settings.pricePerM2,
-        settings.wastePct,
-        settings.laborHours,
-        settings.hourlyRate,
-        settings.hardwareItems,
-        settings.marginPct,
-      ),
+      purchasePrice != null
+        ? sellingFromInputs(
+            surfaceM2,
+            purchasePrice,
+            settings.wastePct,
+            settings.laborHours,
+            settings.hourlyRate,
+            settings.hardwareItems,
+            settings.marginPct,
+          )
+        : incompleteSelling(),
     [
       surfaceM2,
-      settings.pricePerM2,
+      purchasePrice,
       settings.wastePct,
       settings.laborHours,
       settings.hourlyRate,
@@ -388,6 +406,25 @@ function Home() {
       settings.marginPct,
     ],
   );
+
+  useEffect(() => {
+    if (!current) {
+      lastPlanId.current = "";
+      return;
+    }
+    const planId = `${selected}:${current.purchasedArea}:${current.usedArea}:${current.wastePercent}`;
+    if (planId === lastPlanId.current) return;
+    lastPlanId.current = planId;
+    const tau = planWastePct(
+      current.usedArea / 1_000_000,
+      current.purchasedArea / 1_000_000,
+    );
+    if (skipWastePrefill.current) {
+      skipWastePrefill.current = false;
+      if (settings.wastePct > 0) return;
+    }
+    setSettings((s) => (s.wastePct === tau ? s : { ...s, wastePct: tau }));
+  }, [current, selected, settings.wastePct]);
 
   function generateQuote() {
     const el = document.getElementById("quote-sheet");
@@ -402,14 +439,6 @@ function Home() {
   const jobNeed = current
     ? jobNeedFromQuote(current.counts, settings.hardwareItems, specLabels)
     : null;
-
-  const liveSupplier = useMemo(
-    () =>
-      current
-        ? supplierCostFromCounts(current.counts, specs)
-        : null,
-    [current, specs],
-  );
 
   function guardUnsaved(next: () => void) {
     if (!dirty) {
@@ -513,8 +542,19 @@ function Home() {
   function resetWorkspace() {
     const nextRows = [emptyRow()];
     const nextMeta = emptyMeta();
-    const nextSettings = { ...settings, surfaceOverrideM2: null };
+    const nextSettings: AppSettings = {
+      ...DEFAULT_SETTINGS,
+      companyName: settings.companyName,
+      companyAddress: settings.companyAddress,
+      companyPhone: settings.companyPhone,
+      companyEmail: settings.companyEmail,
+      companySiret: settings.companySiret,
+      quoteNumber: settings.quoteNumber,
+      logoDataUrl: settings.logoDataUrl,
+    };
     skipNextPack.current = true;
+    skipWastePrefill.current = true;
+    lastPlanId.current = "";
     setRows(nextRows);
     setResult(null);
     setError(null);
@@ -536,8 +576,11 @@ function Home() {
 
   function openProject(p: Project) {
     skipNextPack.current = true;
+    skipWastePrefill.current = true;
+    lastPlanId.current = "";
     setRows(p.rows.length > 0 ? p.rows : [emptyRow()]);
-    setSettings({ ...DEFAULT_SETTINGS, ...p.settings });
+    const clientName = p.clientName || p.settings.clientName || "";
+    setSettings({ ...DEFAULT_SETTINGS, ...p.settings, clientName });
     setSelected(p.selectedStrategy || "mixed");
     setStockDeduction(p.stockDeduction ?? null);
     rememberSaved(p);
@@ -651,7 +694,7 @@ function Home() {
                 generateQuote();
                 window.print();
               }}
-              disabled={!result || !selling.ok}
+              disabled={!result}
             >
               <Printer />
               Imprimer / PDF
@@ -662,7 +705,7 @@ function Home() {
                 setTab("projet");
                 generateQuote();
               }}
-              disabled={!result || !selling.ok}
+              disabled={!result}
             >
               <FileText />
               Générer le devis
@@ -714,7 +757,12 @@ function Home() {
           <>
         <ProjectsBar
           meta={projectMeta}
-          onMeta={(patch) => setProjectMeta((m) => ({ ...m, ...patch }))}
+          onMeta={(patch) => {
+            setProjectMeta((m) => ({ ...m, ...patch }));
+            if (patch.clientName !== undefined) {
+              setSettings((s) => ({ ...s, clientName: patch.clientName ?? "" }));
+            }
+          }}
           currentId={currentProjectId}
           dirty={dirty}
           projects={projects}
@@ -812,8 +860,11 @@ function Home() {
               strategies={result.strategies}
               selected={selected}
               bestId={result.bestId}
-              onSelect={setSelected}
-              pricePerM2={settings.pricePerM2}
+              onSelect={(id) => {
+                skipWastePrefill.current = false;
+                lastPlanId.current = "";
+                setSelected(id);
+              }}
               stock={stock}
               specs={specs}
             />
@@ -827,10 +878,6 @@ function Home() {
               projects.find((p) => p.id === currentProjectId)?.supplierSnapshot ??
               null
             }
-            onApplyToQuote={(pricePerM2) => {
-              setSettings((s) => ({ ...s, pricePerM2 }));
-              setFlash("Prix moyen fournisseur appliqué au devis.");
-            }}
             onEditPrices={() => setTab("catalogue")}
           />
         )}
@@ -874,10 +921,22 @@ function Home() {
             <div className="no-print">
               <QuotePanel
                 settings={settings}
-                onChange={(patch) => setSettings((s) => ({ ...s, ...patch }))}
-                autoSurfaceM2={autoSurfaceM2}
-                purchasedAreaMm2={current.purchasedArea}
+                onChange={(patch) => {
+                  setSettings((s) => ({ ...s, ...patch }));
+                  if (patch.clientName !== undefined) {
+                    setProjectMeta((m) => ({ ...m, clientName: patch.clientName ?? "" }));
+                  }
+                }}
+                usefulAreaM2={autoSurfaceM2}
+                purchasedAreaM2={purchasedAreaM2}
+                planWastePct={tauPlan}
+                livePricePerM2={liveSupplier?.weightedPricePerM2 ?? null}
+                supplier={liveSupplier}
                 onGenerateQuote={generateQuote}
+                onResetWaste={() => {
+                  skipWastePrefill.current = false;
+                  setSettings((s) => ({ ...s, wastePct: tauPlan }));
+                }}
                 stock={stock}
                 onEnsureStock={(name, unitCost) =>
                   setStock((prev) => ensureStockArticle(prev, name, unitCost))
@@ -885,16 +944,20 @@ function Home() {
               />
             </div>
 
-            {selling.ok && (
-              <QuoteDocument
-                settings={settings}
-                onChange={(patch) => setSettings((s) => ({ ...s, ...patch }))}
-                selling={selling}
-                strategy={current}
-                stock={stock}
-                specs={specs}
-              />
-            )}
+            <QuoteDocument
+              settings={settings}
+              onChange={(patch) => {
+                setSettings((s) => ({ ...s, ...patch }));
+                if (patch.clientName !== undefined) {
+                  setProjectMeta((m) => ({ ...m, clientName: patch.clientName ?? "" }));
+                }
+              }}
+              selling={selling}
+              strategy={current}
+              supplier={liveSupplier}
+              stock={stock}
+              specs={specs}
+            />
 
             {current.unplaced.length > 0 && (
               <div className="no-print rounded-xl border border-destructive/30 bg-card px-4 py-3 text-sm text-destructive">
@@ -981,11 +1044,12 @@ function Home() {
                 — sans repli silencieux sur une autre famille.
               </p>
               <p className="mt-3">
-                Le prix de vente valorise la surface utile du débit : prix réel
-                au m² = prix fournisseur / (1 − taux de perte), puis on ajoute
-                main d’œuvre (temps × taux) et quincaillerie (somme des
-                articles), et on divise par (1 − marge). Les stocks atelier
-                rapprochent panneaux et quincaillerie du besoin du chantier.
+                Le prix de vente valorise la surface utile : prix réel au m² =
+                prix moyen fournisseur / (1 − taux de perte), puis on ajoute
+                main d’œuvre (temps × taux) et quincaillerie, et on divise par
+                (1 − marge). Le prix moyen est la moyenne pondérée par la
+                surface des feuilles achetées — jamais un tarif unique inventé.
+                Le taux de perte est un jugement : par défaut la chute du plan.
               </p>
             </div>
           )}
