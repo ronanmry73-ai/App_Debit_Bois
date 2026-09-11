@@ -67,7 +67,11 @@ export function HardwareList({
   }
 
   return (
-    <section aria-labelledby="quincaillerie-title" className="no-print">
+    <section
+      id="quinca-atelier"
+      aria-labelledby="quincaillerie-title"
+      className="no-print"
+    >
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h3
@@ -77,8 +81,8 @@ export function HardwareList({
             Quincaillerie et fournitures
           </h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Chaque ligne : nom, quantité, prix unitaire. Le stock atelier
-            s’affiche à droite.
+            Saisie chantier : nom, quantité, prix unitaire. Les mêmes lignes
+            sont reprises sur le devis, sans double liste.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

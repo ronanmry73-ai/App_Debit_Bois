@@ -32,7 +32,7 @@ export function QuoteDocument({
   onPrint,
 }: Props) {
   const hw = hardwareLines(settings.hardwareItems).filter(
-    (l) => l.name || l.qty > 0 || l.unitPrice > 0,
+    (l) => l.name.trim() && l.qty > 0,
   );
   const hwTotal = hw.reduce((s, l) => s + l.subtotal, 0);
   const mo = laborCost(settings.laborHours, settings.hourlyRate);

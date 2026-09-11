@@ -1,18 +1,18 @@
-import { FileText } from "lucide-react";
+import { FileText, Hammer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { HardwareList } from "@/components/hardware-list";
-import type { AppSettings, HardwareItem } from "@/lib/types";
-import type { StockItem } from "@/lib/stock";
+import type { AppSettings } from "@/lib/types";
 import type { SupplierCost } from "@/lib/supplier";
 import {
+  hardwareLines,
   incompleteSelling,
   laborCost,
   sellingFromInputs,
+  sumHardware,
   type SellingOk,
   type SellingResult,
 } from "@/lib/pricing";
@@ -28,8 +28,7 @@ type Props = {
   supplier: SupplierCost | null;
   onGenerateQuote: () => void;
   onResetWaste: () => void;
-  stock?: StockItem[];
-  onEnsureStock?: (name: string, unitCost: number) => void;
+  onEditHardware?: () => void;
 };
 
 function parseNum(raw: string): number {
@@ -51,8 +50,7 @@ export function QuotePanel({
   supplier,
   onGenerateQuote,
   onResetWaste,
-  stock = [],
-  onEnsureStock,
+  onEditHardware,
 }: Props) {
   const forced = !!settings.forcePricePerM2;
   const purchasePrice =
@@ -165,9 +163,7 @@ export function QuotePanel({
                   value={
                     settings.surfaceOverrideM2 != null
                       ? String(settings.surfaceOverrideM2)
-                      : String(
-                          Number(usefulAreaM2.toFixed(4)).toString(),
-                        )
+                      : String(Number(usefulAreaM2.toFixed(4)).toString())
                   }
                   onChange={(e) =>
                     onChange({ surfaceOverrideM2: parseNum(e.target.value) })
@@ -244,16 +240,10 @@ export function QuotePanel({
             />
           </div>
 
-          <div className="mt-6">
-            <HardwareList
-              items={settings.hardwareItems}
-              onChange={(hardwareItems: HardwareItem[]) =>
-                onChange({ hardwareItems })
-              }
-              stock={stock}
-              onEnsureStock={onEnsureStock}
-            />
-          </div>
+          <HardwareReadonly
+            items={settings.hardwareItems}
+            onEdit={onEditHardware}
+          />
 
           {selling.ok ? (
             <SellingRecap
@@ -275,6 +265,72 @@ export function QuotePanel({
         </CardContent>
       </Card>
     </section>
+  );
+}
+
+function HardwareReadonly({
+  items,
+  onEdit,
+}: {
+  items: AppSettings["hardwareItems"];
+  onEdit?: () => void;
+}) {
+  const lines = hardwareLines(items).filter((l) => l.name.trim());
+  const total = sumHardware(items);
+  return (
+    <div className="mt-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h3 className="font-display text-base font-medium">
+            Quincaillerie et fournitures
+          </h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Reprise de la fiche chantier. Pour ajouter ou retirer une ligne,
+            passez par l’atelier.
+          </p>
+        </div>
+        {onEdit && (
+          <Button type="button" variant="outline" onClick={onEdit}>
+            <Hammer />
+            Modifier dans l’atelier
+          </Button>
+        )}
+      </div>
+      {lines.length === 0 ? (
+        <p className="mt-3 rounded-lg bg-muted/70 px-4 py-3 text-sm text-muted-foreground">
+          Aucun article saisi en atelier.
+        </p>
+      ) : (
+        <div className="mt-3 overflow-x-auto rounded-lg border border-border">
+          <table className="quote-table w-full text-sm">
+            <thead>
+              <tr>
+                <th>Article</th>
+                <th className="num">Qté</th>
+                <th className="num">Prix unit.</th>
+                <th className="num">Sous-total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l) => (
+                <tr key={l.id}>
+                  <td>{l.name}</td>
+                  <td className="num">{l.qty}</td>
+                  <td className="num">{formatEuro(l.unitPrice)}</td>
+                  <td className="num">{formatEuro(l.subtotal)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={3}>Total quincaillerie</td>
+                <td className="num">{formatEuro(total)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

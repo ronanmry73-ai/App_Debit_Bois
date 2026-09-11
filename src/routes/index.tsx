@@ -23,6 +23,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { JobNeedPanel } from "@/components/job-need-panel";
 import { SupplierCostPanel } from "@/components/supplier-cost-panel";
 import { AtelierSheet } from "@/components/atelier-sheet";
+import { HardwareList } from "@/components/hardware-list";
 import {
   optimizeCutting,
   type OptimizeOutput,
@@ -469,6 +470,17 @@ function Home() {
     setViewMode("devis");
     requestAnimationFrame(() => {
       document.getElementById("quote-sheet")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
+
+  function goAtelierHardware() {
+    setCatalogOpen(false);
+    setViewMode("atelier");
+    requestAnimationFrame(() => {
+      document.getElementById("quinca-atelier")?.scrollIntoView({
         behavior: "smooth",
         block: "start",
       });
@@ -1031,6 +1043,21 @@ function Home() {
               />
             )}
 
+            <Card className="no-print">
+              <CardContent className="p-5">
+                <HardwareList
+                  items={settings.hardwareItems}
+                  onChange={(hardwareItems) =>
+                    setSettings((s) => ({ ...s, hardwareItems }))
+                  }
+                  stock={stock}
+                  onEnsureStock={(name, unitCost) =>
+                    setStock((prev) => ensureStockArticle(prev, name, unitCost))
+                  }
+                />
+              </CardContent>
+            </Card>
+
             {!result && (
               <p className="no-print rounded-xl bg-card px-5 py-8 text-center text-sm text-muted-foreground shadow-[var(--shadow-border)]">
                 Saisissez votre débit puis lancez le calcul pour obtenir le nombre de
@@ -1103,10 +1130,7 @@ function Home() {
                 skipWastePrefill.current = false;
                 setSettings((s) => ({ ...s, wastePct: tauPlan }));
               }}
-              stock={stock}
-              onEnsureStock={(name, unitCost) =>
-                setStock((prev) => ensureStockArticle(prev, name, unitCost))
-              }
+              onEditHardware={goAtelierHardware}
             />
             {result && current ? (
               <QuoteDocument
