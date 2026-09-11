@@ -1,6 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { FileText, Printer, RotateCcw, Calculator, ChevronDown, Package } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import {
+  FileText,
+  Printer,
+  Calculator,
+  ChevronDown,
+  Package,
+  Layers,
+  FolderOpen,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PieceList } from "@/components/piece-list";
@@ -10,6 +18,9 @@ import { QuotePanel } from "@/components/quote-panel";
 import { QuoteDocument } from "@/components/quote-document";
 import { CuttingPlanList } from "@/components/cutting-plan";
 import { StockPanel } from "@/components/stock-panel";
+import { CatalogPanel } from "@/components/catalog-panel";
+import { ProjectsBar } from "@/components/projects-bar";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   optimizeCutting,
   type OptimizeOutput,
@@ -18,21 +29,42 @@ import {
 } from "@/lib/packing";
 import { sellingFromInputs } from "@/lib/pricing";
 import {
-  ensurePanelRows,
   ensureStockArticle,
   exampleStock,
   jobNeedFromQuote,
+  syncStockWithCatalog,
   type StockItem,
   type StockMove,
 } from "@/lib/stock";
 import {
-  exampleRows,
-  exampleQuoteRows,
-  exampleQuotePatch,
   emptyRow,
+  INITIAL_EMPTY_ROW,
   defaultQuoteIdentity,
-  STORAGE_KEY,
 } from "@/lib/presets";
+import {
+  packingSpecs,
+  mergeCatalog,
+  seedCatalog,
+  type Catalog,
+} from "@/lib/catalog";
+import {
+  duplicateProject,
+  findProjectByName,
+  parseImportedProject,
+  serializeProject,
+  snapshotProject,
+  uniqueImportedName,
+  usedRefIdsFromProjects,
+  type Project,
+} from "@/lib/projects";
+import {
+  emptyMeta,
+  exportText,
+  importText,
+  loadPersisted,
+  savePersisted,
+  type ProjectMeta,
+} from "@/lib/persist";
 import type { AppSettings, PieceRow } from "@/lib/types";
 
 export const Route = createFileRoute("/")({ component: Home });
@@ -51,7 +83,16 @@ const DEFAULT_SETTINGS: AppSettings = {
   hardwareItems: [{ id: "hw-empty-1", name: "", qty: "1", unitPrice: "" }],
 };
 
-function parseRows(rows: PieceRow[]): PieceDef[] {
+type DialogState =
+  | { kind: "none" }
+  | { kind: "unsaved"; next: () => void }
+  | { kind: "save-as"; next?: () => void }
+  | { kind: "rename"; id: string }
+  | { kind: "delete"; id: string }
+  | { kind: "import-dup"; project: Project; catalog?: Catalog }
+  | { kind: "alert"; title: string; message: string };
+
+function parseRows(rows: PieceRow[], catalog: Catalog): PieceDef[] {
   return rows
     .map((r) => ({
       id: r.id,
@@ -59,6 +100,8 @@ function parseRows(rows: PieceRow[]): PieceDef[] {
       length: Number(String(r.length).replace(",", ".")),
       width: Number(String(r.width).replace(",", ".")),
       qty: Math.floor(Number(String(r.qty).replace(",", "."))),
+      familyId: r.familyId || null,
+      familyName: catalog.families.find((f) => f.id === r.familyId)?.name ?? null,
     }))
     .filter(
       (p) =>
@@ -71,49 +114,155 @@ function parseRows(rows: PieceRow[]): PieceDef[] {
     );
 }
 
+function fpOf(input: {
+  rows: PieceRow[];
+  settings: AppSettings;
+  stock: StockItem[];
+  moves: StockMove[];
+  selected: string;
+  meta: ProjectMeta;
+}): string {
+  return JSON.stringify(input);
+}
+
+function usedFromOutput(out: OptimizeOutput | null): string[] {
+  if (!out) return [];
+  const ids = new Set<string>();
+  for (const s of out.strategies) {
+    for (const [id, n] of Object.entries(s.counts)) {
+      if (n > 0) ids.add(id);
+    }
+    for (const p of s.panels) ids.add(p.format);
+  }
+  return [...ids];
+}
+
 function Home() {
-  const [rows, setRows] = useState<PieceRow[]>(exampleRows);
+  const [rows, setRows] = useState<PieceRow[]>([INITIAL_EMPTY_ROW]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [result, setResult] = useState<OptimizeOutput | null>(null);
   const [selected, setSelected] = useState<StrategyId>("mixed");
   const [error, setError] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [algoOpen, setAlgoOpen] = useState(false);
   const [stock, setStock] = useState<StockItem[]>(exampleStock);
   const [moves, setMoves] = useState<StockMove[]>([]);
+  const [catalog, setCatalog] = useState<Catalog>(seedCatalog);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [projectMeta, setProjectMeta] = useState<ProjectMeta>(emptyMeta);
+  const [usedRefIds, setUsedRefIds] = useState<string[]>([]);
+  const [savedFp, setSavedFp] = useState("");
+  const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
+  const [promptValue, setPromptValue] = useState("");
+  const skipNextPack = useRef(false);
+
+  const liveFp = useMemo(
+    () => fpOf({ rows, settings, stock, moves, selected, meta: projectMeta }),
+    [rows, settings, stock, moves, selected, projectMeta],
+  );
+  const dirty = hydrated && liveFp !== savedFp;
+
+  const specs = useMemo(
+    () => packingSpecs(catalog, usedRefIds),
+    [catalog, usedRefIds],
+  );
+
+  const blockedRefIds = useMemo(() => {
+    const ids = new Set(usedRefIds);
+    for (const id of usedRefIdsFromProjects(projects)) ids.add(id);
+    return [...ids];
+  }, [usedRefIds, projects]);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw) as {
-          rows?: PieceRow[];
-          settings?: AppSettings;
-          stock?: StockItem[];
-          moves?: StockMove[];
-        };
-        if (Array.isArray(saved.rows) && saved.rows.length > 0) {
-          setRows(saved.rows);
-        }
-        if (saved.settings) {
-          setSettings({ ...DEFAULT_SETTINGS, ...saved.settings });
-        }
-        if (Array.isArray(saved.stock) && saved.stock.length > 0) {
-          setStock(ensurePanelRows(saved.stock));
-        }
-        if (Array.isArray(saved.moves)) {
-          setMoves(saved.moves);
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    setHydrated(true);
+    let cancelled = false;
+    void loadPersisted({ settings: DEFAULT_SETTINGS, emptyRow: INITIAL_EMPTY_ROW }).then(
+      (saved) => {
+        if (cancelled) return;
+        skipNextPack.current = true;
+        setRows(saved.rows);
+        setSettings({ ...DEFAULT_SETTINGS, ...saved.settings });
+        const stockSynced = syncStockWithCatalog(saved.stock, saved.catalog);
+        setStock(stockSynced);
+        setMoves(saved.moves);
+        setCatalog(saved.catalog);
+        setProjects(saved.projects);
+        setCurrentProjectId(saved.currentProjectId);
+        setProjectMeta(saved.projectMeta);
+        setUsedRefIds(saved.usedRefIds);
+        setSelected(saved.selectedStrategy || "mixed");
+        const named = saved.projects.find((p) => p.id === saved.currentProjectId);
+        setSavedFp(
+          named
+            ? fpOf({
+                rows: named.rows,
+                settings: named.settings,
+                stock: named.stock,
+                moves: named.moves,
+                selected: named.selectedStrategy,
+                meta: {
+                  name: named.name,
+                  description: named.description,
+                  notes: named.notes,
+                  clientName: named.clientName,
+                },
+              })
+            : fpOf({
+                rows: saved.rows,
+                settings: { ...DEFAULT_SETTINGS, ...saved.settings },
+                stock: stockSynced,
+                moves: saved.moves,
+                selected: saved.selectedStrategy || "mixed",
+                meta: saved.projectMeta,
+              }),
+        );
+        setHydrated(true);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
-    const defs = parseRows(rows);
+    const t = setTimeout(() => {
+      void savePersisted({
+        version: 5,
+        rows,
+        settings,
+        stock,
+        moves,
+        catalog,
+        projects,
+        currentProjectId,
+        projectMeta,
+        selectedStrategy: selected,
+        usedRefIds,
+      });
+    }, 280);
+    return () => clearTimeout(t);
+  }, [
+    hydrated,
+    rows,
+    settings,
+    stock,
+    moves,
+    catalog,
+    projects,
+    currentProjectId,
+    projectMeta,
+    selected,
+    usedRefIds,
+  ]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    if (skipNextPack.current) {
+      skipNextPack.current = false;
+    }
+    const defs = parseRows(rows, catalog);
     if (defs.length === 0) {
       setResult(null);
       return;
@@ -123,34 +272,53 @@ function Home() {
       setError("Limitez le débit à 400 pièces pour garder le calcul instantané.");
       return;
     }
+    if (specs.length === 0) {
+      setResult(null);
+      setError(
+        "Aucune référence de panneau active. Activez une référence ou ajoutez-en une.",
+      );
+      return;
+    }
     setError(null);
     const out = optimizeCutting(defs, {
       kerf: settings.kerf,
       allowRotation: settings.allowRotation,
       method: settings.method,
+      specs,
     });
     setResult(out);
+    setUsedRefIds((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const id of usedFromOutput(out)) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      return changed ? [...next] : prev;
+    });
     setSelected((prev) =>
       out.strategies.some((s) => s.id === prev) ? prev : out.bestId,
     );
   }, [
     hydrated,
     rows,
+    catalog,
+    specs,
     settings.kerf,
     settings.allowRotation,
     settings.method,
   ]);
 
   useEffect(() => {
-    if (!hydrated) return;
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ rows, settings, stock, moves }),
-    );
-  }, [rows, settings, stock, moves, hydrated]);
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 4500);
+    return () => clearTimeout(t);
+  }, [flash]);
 
   function calculate() {
-    const defs = parseRows(rows);
+    const defs = parseRows(rows, catalog);
     if (defs.length === 0) {
       setResult(null);
       setError("Ajoutez au moins une pièce avec longueur, largeur et quantité.");
@@ -161,9 +329,29 @@ function Home() {
       setError("Limitez le débit à 400 pièces pour garder le calcul instantané.");
       return;
     }
+    if (specs.length === 0) {
+      setError(
+        "Aucune référence de panneau active. Activez une référence ou ajoutez-en une.",
+      );
+      return;
+    }
     setError(null);
-    const out = optimizeCutting(defs, settings);
+    const out = optimizeCutting(defs, {
+      ...settings,
+      specs,
+    });
     setResult(out);
+    setUsedRefIds((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const id of usedFromOutput(out)) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      return changed ? [...next] : prev;
+    });
     setSelected(out.bestId);
   }
 
@@ -201,9 +389,211 @@ function Home() {
     el?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  const specLabels = useMemo(
+    () => Object.fromEntries(specs.map((s) => [s.id, s.label])),
+    [specs],
+  );
+
   const jobNeed = current
-    ? jobNeedFromQuote(current.counts, settings.hardwareItems)
+    ? jobNeedFromQuote(current.counts, settings.hardwareItems, specLabels)
     : null;
+
+  function guardUnsaved(next: () => void) {
+    if (!dirty) {
+      next();
+      return;
+    }
+    setDialog({ kind: "unsaved", next });
+  }
+
+  function collectProject(name: string, id?: string, createdAt?: string): Project {
+    const clientName = projectMeta.clientName || settings.clientName;
+    return snapshotProject({
+      id,
+      createdAt,
+      name,
+      description: projectMeta.description,
+      clientName,
+      notes: projectMeta.notes,
+      rows,
+      settings: { ...settings, clientName },
+      stock,
+      moves,
+      selectedStrategy: selected,
+      usedRefIds: [...new Set([...usedRefIds, ...usedFromOutput(result)])],
+    });
+  }
+
+  function rememberSaved(p: Project) {
+    setCurrentProjectId(p.id);
+    setProjectMeta({
+      name: p.name,
+      description: p.description,
+      notes: p.notes,
+      clientName: p.clientName,
+    });
+    setUsedRefIds(p.usedRefIds ?? []);
+    setSavedFp(
+      fpOf({
+        rows: p.rows,
+        settings: p.settings,
+        stock: p.stock,
+        moves: p.moves,
+        selected: p.selectedStrategy,
+        meta: {
+          name: p.name,
+          description: p.description,
+          notes: p.notes,
+          clientName: p.clientName,
+        },
+      }),
+    );
+  }
+
+  function saveNamed(name: string, asCopy: boolean): boolean {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setDialog({
+        kind: "alert",
+        title: "Nom manquant",
+        message: "Indiquez un nom de projet pour l’enregistrer.",
+      });
+      return false;
+    }
+    const clash = findProjectByName(
+      projects,
+      trimmed,
+      asCopy ? undefined : currentProjectId ?? undefined,
+    );
+    if (clash && (asCopy || clash.id !== currentProjectId)) {
+      setDialog({
+        kind: "alert",
+        title: "Nom déjà utilisé",
+        message: `Un projet nommé « ${trimmed} » existe déjà. Choisissez un autre nom.`,
+      });
+      return false;
+    }
+    const existing = asCopy ? undefined : projects.find((p) => p.id === currentProjectId);
+    const p = collectProject(trimmed, existing?.id, existing?.createdAt);
+    setProjects((prev) => {
+      const i = prev.findIndex((x) => x.id === p.id);
+      if (i >= 0) {
+        const next = prev.slice();
+        next[i] = p;
+        return next;
+      }
+      return [...prev, p];
+    });
+    rememberSaved(p);
+    setSettings(p.settings);
+    setFlash(`Projet « ${p.name} » enregistré.`);
+    return true;
+  }
+
+  function saveCurrent(): boolean {
+    if (!projectMeta.name.trim()) {
+      setPromptValue("");
+      setDialog({ kind: "save-as" });
+      return false;
+    }
+    return saveNamed(projectMeta.name, false);
+  }
+
+  function resetWorkspace() {
+    const nextRows = [emptyRow()];
+    const nextMeta = emptyMeta();
+    const nextSettings = { ...settings, surfaceOverrideM2: null };
+    skipNextPack.current = true;
+    setRows(nextRows);
+    setResult(null);
+    setError(null);
+    setCurrentProjectId(null);
+    setProjectMeta(nextMeta);
+    setUsedRefIds([]);
+    setSelected("mixed");
+    setSettings(nextSettings);
+    setSavedFp(
+      fpOf({
+        rows: nextRows,
+        settings: nextSettings,
+        stock,
+        moves,
+        selected: "mixed",
+        meta: nextMeta,
+      }),
+    );
+  }
+
+  function openProject(p: Project) {
+    skipNextPack.current = true;
+    setRows(p.rows.length > 0 ? p.rows : [emptyRow()]);
+    setSettings({ ...DEFAULT_SETTINGS, ...p.settings });
+    setStock(syncStockWithCatalog(p.stock?.length ? p.stock : exampleStock(), catalog));
+    setMoves(p.moves ?? []);
+    setSelected(p.selectedStrategy || "mixed");
+    rememberSaved(p);
+    setError(null);
+    setFlash(`Projet « ${p.name} » ouvert.`);
+  }
+
+  function applyImported(project: Project, incomingCatalog?: Catalog, rename?: string) {
+    const nextCat = mergeCatalog(catalog, incomingCatalog);
+    setCatalog(nextCat);
+    const named: Project = {
+      ...project,
+      name: rename ?? project.name,
+    };
+    setProjects((prev) => {
+      const i = prev.findIndex((x) => x.id === named.id);
+      if (i >= 0) {
+        const copy = prev.slice();
+        copy[i] = named;
+        return copy;
+      }
+      if (prev.some((x) => x.id === named.id)) {
+        return [...prev, { ...named, id: named.id }];
+      }
+      return [...prev, named];
+    });
+    openProject(named);
+  }
+
+  async function handleExport() {
+    const name = projectMeta.name.trim() || "projet-debit-bois";
+    const existing = projects.find((p) => p.id === currentProjectId);
+    const p = collectProject(name, existing?.id, existing?.createdAt);
+    const ok = await exportText(
+      `${name.replace(/[^\wÀ-ÿ-]+/g, "-")}.json`,
+      serializeProject(p, catalog),
+    );
+    if (ok) setFlash("Projet exporté.");
+  }
+
+  async function handleImport() {
+    const raw = await importText();
+    if (raw == null) return;
+    const parsed = parseImportedProject(raw);
+    if (!parsed.ok) {
+      setDialog({
+        kind: "alert",
+        title: "Fichier invalide",
+        message: parsed.error,
+      });
+      return;
+    }
+    const clash = findProjectByName(projects, parsed.project.name);
+    if (clash) {
+      setDialog({
+        kind: "import-dup",
+        project: parsed.project,
+        catalog: parsed.catalog,
+      });
+      return;
+    }
+    applyImported(parsed.project, parsed.catalog);
+  }
+
+  const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
 
   return (
     <div className="min-h-dvh">
@@ -214,7 +604,7 @@ function Home() {
             <div>
               <p className="font-display text-xl font-medium tracking-tight">Débit Bois</p>
               <p className="text-sm text-muted-foreground">
-                Panneaux 2500 × 400 mm et 2500 × 600 mm
+                Calepinage, devis et projets — références de panneaux paramétrables
               </p>
             </div>
           </div>
@@ -222,40 +612,28 @@ function Home() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => {
-                const next = exampleRows();
-                setSettings((s) => ({ ...s, surfaceOverrideM2: null }));
-                setRows(next);
-                setError(null);
-                const out = optimizeCutting(parseRows(next), settings);
-                setResult(out);
-                setSelected(out.bestId);
-              }}
+              onClick={() =>
+                document.getElementById("projets")?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                })
+              }
             >
-              <RotateCcw />
-              Exemple
+              <FolderOpen />
+              Projets
             </Button>
             <Button
               type="button"
               variant="outline"
-              onClick={() => {
-                const next = exampleQuoteRows();
-                const nextSettings = { ...settings, ...exampleQuotePatch() };
-                setSettings(nextSettings);
-                setRows(next);
-                setError(null);
-                const out = optimizeCutting(parseRows(next), nextSettings);
-                setResult(out);
-                setSelected(out.bestId);
-                requestAnimationFrame(() =>
-                  document.getElementById("quote-sheet")?.scrollIntoView({
-                    behavior: "smooth",
-                    block: "start",
-                  }),
-                );
-              }}
+              onClick={() =>
+                document.getElementById("catalogue")?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                })
+              }
             >
-              Exemple devis
+              <Layers />
+              Panneaux
             </Button>
             <Button
               type="button"
@@ -295,6 +673,74 @@ function Home() {
       </header>
 
       <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-6 sm:px-6 sm:py-8">
+        {(flash || error) && (
+          <div className="no-print space-y-2">
+            {flash && (
+              <p className="rounded-xl border border-border bg-card px-4 py-3 text-sm">
+                {flash}
+              </p>
+            )}
+            {error && (
+              <p className="rounded-xl border border-destructive/30 bg-card px-4 py-3 text-sm text-destructive">
+                {error}
+              </p>
+            )}
+          </div>
+        )}
+
+        <ProjectsBar
+          meta={projectMeta}
+          onMeta={(patch) => setProjectMeta((m) => ({ ...m, ...patch }))}
+          currentId={currentProjectId}
+          dirty={dirty}
+          projects={projects}
+          onNew={() => guardUnsaved(() => resetWorkspace())}
+          onSave={() => {
+            saveCurrent();
+          }}
+          onSaveAs={() => {
+            setPromptValue(projectMeta.name ? `${projectMeta.name} (copie)` : "");
+            setDialog({ kind: "save-as" });
+          }}
+          onOpen={(id) => {
+            const p = projects.find((x) => x.id === id);
+            if (!p) return;
+            if (id === currentProjectId) return;
+            guardUnsaved(() => openProject(p));
+          }}
+          onClose={() => guardUnsaved(() => resetWorkspace())}
+          onDuplicate={(id) => {
+            const p = projects.find((x) => x.id === id);
+            if (!p) return;
+            const copy = duplicateProject(p);
+            setProjects((prev) => [...prev, copy]);
+            guardUnsaved(() => openProject(copy));
+          }}
+          onRename={(id) => {
+            const p = projects.find((x) => x.id === id);
+            if (!p) return;
+            setPromptValue(p.name);
+            setDialog({ kind: "rename", id });
+          }}
+          onDelete={(id) => setDialog({ kind: "delete", id })}
+          onExport={() => {
+            void handleExport();
+          }}
+          onImport={() => {
+            void handleImport();
+          }}
+        />
+
+        <CatalogPanel
+          catalog={catalog}
+          usedRefIds={blockedRefIds}
+          onChange={(next, err) => {
+            setCatalog(next);
+            setStock((prev) => syncStockWithCatalog(prev, next));
+            if (err) setError(err);
+            else setError(null);
+          }}
+        />
 
         <Card className="no-print">
           <CardHeader>
@@ -321,7 +767,6 @@ function Home() {
               >
                 Vider la liste
               </Button>
-              {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
           </CardContent>
         </Card>
@@ -332,8 +777,21 @@ function Home() {
             onChange={setRows}
             kerf={settings.kerf}
             allowRotation={settings.allowRotation}
+            families={catalog.families}
+            catalog={catalog}
+            specs={specs}
           />
         </div>
+
+        {result && result.warnings.length > 0 && (
+          <div className="no-print rounded-xl border border-destructive/30 bg-card px-4 py-3 text-sm text-destructive">
+            <ul className="space-y-1">
+              {result.warnings.map((w) => (
+                <li key={`${w.pieceId}-${w.message}`}>{w.message}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {result && current && (
           <div className="no-print">
@@ -344,6 +802,7 @@ function Home() {
               onSelect={setSelected}
               pricePerM2={settings.pricePerM2}
               stock={stock}
+              specs={specs}
             />
           </div>
         )}
@@ -380,6 +839,7 @@ function Home() {
                 selling={selling}
                 strategy={current}
                 stock={stock}
+                specs={specs}
               />
             )}
 
@@ -389,8 +849,8 @@ function Home() {
                 {current.unplaced
                   .map((p) => `${p.name} ${p.w}×${p.h}`)
                   .join(", ")}
-                . Vérifiez qu’elles tiennent dans 2500 × 600 mm (trait de scie
-                compris).
+                . Vérifiez qu’elles tiennent dans une référence active
+                {currentProject ? " de ce projet" : ""}.
               </div>
             )}
 
@@ -441,9 +901,8 @@ function Home() {
           {algoOpen && (
             <div className="mt-2 rounded-xl bg-card px-5 py-4 text-sm leading-relaxed text-ink-soft shadow-[var(--shadow-border)]">
               <p>
-                L’outil compare trois stratégies d’achat : uniquement des
-                panneaux 2500 × 400, uniquement des 2500 × 600, et un mix des
-                deux. Pour chaque stratégie, deux algorithmes de bin packing 2D
+                L’outil compare une stratégie par référence de panneau active, plus
+                un mix. Pour chaque stratégie, deux algorithmes de bin packing 2D
                 sont évalués :
               </p>
               <ul className="mt-3 list-disc space-y-2 pl-5">
@@ -464,17 +923,16 @@ function Home() {
                 valeur : les pièces sont séparées du kerf, sans « faux trait »
                 sur le bord du panneau. La rotation 90° est testée si elle est
                 activée. La stratégie retenue est celle qui minimise la surface
-                achetée, à pièces toutes placées.
+                achetée, à pièces toutes placées. Une famille prioritaire sur une
+                pièce restreint le calcul aux références actives de cette famille
+                — sans repli silencieux sur une autre famille.
               </p>
               <p className="mt-3">
                 Le prix de vente valorise la surface utile du débit : prix réel
                 au m² = prix fournisseur / (1 − taux de perte), puis on ajoute
                 main d’œuvre (temps × taux) et quincaillerie (somme des
-                articles), et on divise par (1 − marge). Exemple devis : 40 €/m²,
-                2 m², 15 % de perte, 2,5 h à 40 €/h, 30 € de quincaillerie, 30 %
-                de marge → 320,17 € HT. Les stocks atelier rapprochent panneaux
-                et quincaillerie du besoin du chantier, et permettent de déduire
-                les sorties.
+                articles), et on divise par (1 − marge). Les stocks atelier
+                rapprochent panneaux et quincaillerie du besoin du chantier.
               </p>
             </div>
           )}
@@ -482,9 +940,195 @@ function Home() {
       </main>
 
       <footer className="app-footer no-print mx-auto max-w-6xl px-4 pb-10 text-xs text-muted-foreground sm:px-6">
-        Unités en millimètres. Les panneaux d’achat sont fixes : 2500 × 400 mm et
-        2500 × 600 mm.
+        Unités en millimètres. Les références de panneaux se gèrent dans la
+        rubrique Panneaux. En desktop, les projets sont aussi enregistrés dans le
+        dossier de données de l’application.
       </footer>
+
+      <ConfirmDialog
+        open={dialog.kind === "unsaved"}
+        title="Modifications non enregistrées"
+        message="Des modifications n’ont pas été enregistrées. Voulez-vous enregistrer avant de quitter ?"
+        actions={[
+          {
+            label: "Annuler",
+            variant: "ghost",
+            onClick: () => setDialog({ kind: "none" }),
+          },
+          {
+            label: "Quitter sans enregistrer",
+            variant: "outline",
+            onClick: () => {
+              if (dialog.kind !== "unsaved") return;
+              const next = dialog.next;
+              setDialog({ kind: "none" });
+              next();
+            },
+          },
+          {
+            label: "Enregistrer",
+            onClick: () => {
+              if (dialog.kind !== "unsaved") return;
+              const next = dialog.next;
+              if (!projectMeta.name.trim()) {
+                setPromptValue("");
+                setDialog({ kind: "save-as", next });
+                return;
+              }
+              if (saveNamed(projectMeta.name, false)) {
+                setDialog({ kind: "none" });
+                next();
+              }
+            },
+          },
+        ]}
+      />
+
+      <ConfirmDialog
+        open={dialog.kind === "save-as"}
+        title="Enregistrer sous"
+        message="Donnez un nom à ce projet. Une copie indépendante sera créée."
+        inputLabel="Nom du projet"
+        placeholder="Étagère salon"
+        value={promptValue}
+        onValueChange={setPromptValue}
+        actions={[
+          {
+            label: "Annuler",
+            variant: "ghost",
+            onClick: () => setDialog({ kind: "none" }),
+          },
+          {
+            label: "Enregistrer",
+            onClick: () => {
+              const next = dialog.kind === "save-as" ? dialog.next : undefined;
+              if (saveNamed(promptValue, true)) {
+                setDialog({ kind: "none" });
+                next?.();
+              }
+            },
+          },
+        ]}
+      />
+
+      <ConfirmDialog
+        open={dialog.kind === "rename"}
+        title="Renommer le projet"
+        message="Le nouveau nom remplace l’ancien, sans créer de doublon."
+        inputLabel="Nouveau nom"
+        value={promptValue}
+        onValueChange={setPromptValue}
+        actions={[
+          {
+            label: "Annuler",
+            variant: "ghost",
+            onClick: () => setDialog({ kind: "none" }),
+          },
+          {
+            label: "Renommer",
+            onClick: () => {
+              if (dialog.kind !== "rename") return;
+              const trimmed = promptValue.trim();
+              if (!trimmed) return;
+              const clash = findProjectByName(projects, trimmed, dialog.id);
+              if (clash) {
+                setDialog({
+                  kind: "alert",
+                  title: "Nom déjà utilisé",
+                  message: `Un projet nommé « ${trimmed} » existe déjà.`,
+                });
+                return;
+              }
+              setProjects((prev) =>
+                prev.map((p) =>
+                  p.id === dialog.id
+                    ? { ...p, name: trimmed, updatedAt: new Date().toISOString() }
+                    : p,
+                ),
+              );
+              if (currentProjectId === dialog.id) {
+                setProjectMeta((m) => ({ ...m, name: trimmed }));
+              }
+              setDialog({ kind: "none" });
+              setFlash("Projet renommé.");
+            },
+          },
+        ]}
+      />
+
+      <ConfirmDialog
+        open={dialog.kind === "delete"}
+        title="Supprimer le projet"
+        message="Cette action est définitive. Le projet sera retiré de cet ordinateur."
+        actions={[
+          {
+            label: "Annuler",
+            variant: "ghost",
+            onClick: () => setDialog({ kind: "none" }),
+          },
+          {
+            label: "Supprimer",
+            variant: "destructive",
+            onClick: () => {
+              if (dialog.kind !== "delete") return;
+              const id = dialog.id;
+              setProjects((prev) => prev.filter((p) => p.id !== id));
+              if (currentProjectId === id) resetWorkspace();
+              setDialog({ kind: "none" });
+              setFlash("Projet supprimé.");
+            },
+          },
+        ]}
+      />
+
+      <ConfirmDialog
+        open={dialog.kind === "import-dup"}
+        title="Un projet porte déjà ce nom"
+        message="Voulez-vous l’enregistrer sous un nouveau nom, ou remplacer le projet existant ?"
+        actions={[
+          {
+            label: "Annuler",
+            variant: "ghost",
+            onClick: () => setDialog({ kind: "none" }),
+          },
+          {
+            label: "Nouveau nom",
+            variant: "outline",
+            onClick: () => {
+              if (dialog.kind !== "import-dup") return;
+              const name = uniqueImportedName(projects, dialog.project.name);
+              applyImported({ ...dialog.project, name }, dialog.catalog, name);
+              setDialog({ kind: "none" });
+            },
+          },
+          {
+            label: "Remplacer",
+            onClick: () => {
+              if (dialog.kind !== "import-dup") return;
+              const existing = findProjectByName(projects, dialog.project.name);
+              const merged = {
+                ...dialog.project,
+                id: existing?.id ?? dialog.project.id,
+                createdAt: existing?.createdAt ?? dialog.project.createdAt,
+              };
+              applyImported(merged, dialog.catalog);
+              setDialog({ kind: "none" });
+            },
+          },
+        ]}
+      />
+
+      <ConfirmDialog
+        open={dialog.kind === "alert"}
+        title={dialog.kind === "alert" ? dialog.title : ""}
+        message={dialog.kind === "alert" ? dialog.message : ""}
+        actions={[
+          {
+            label: "OK",
+            onClick: () => setDialog({ kind: "none" }),
+          },
+        ]}
+      />
     </div>
   );
 }

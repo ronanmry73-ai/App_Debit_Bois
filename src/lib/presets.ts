@@ -1,7 +1,8 @@
-import { newId } from "@/lib/utils";
-import type { AppSettings, HardwareItem, PieceRow, QuoteIdentity } from "@/lib/types";
+import { newId } from "./utils.ts";
+import type { AppSettings, HardwareItem, PieceRow, QuoteIdentity } from "./types.ts";
 
-export const STORAGE_KEY = "debit-bois-v4";
+export const STORAGE_KEY = "debit-bois-v5";
+export const LEGACY_STORAGE_KEY = "debit-bois-v4";
 
 export function exampleRows(): PieceRow[] {
   return [
@@ -22,8 +23,18 @@ export function exampleQuoteRows(): PieceRow[] {
 }
 
 export function emptyRow(): PieceRow {
-  return { id: newId(), name: "", length: "", width: "", qty: "1" };
+  return { id: newId(), name: "", length: "", width: "", qty: "1", familyId: "" };
 }
+
+/** Rangée initiale SSR-stable (évite un décalage d’hydratation). */
+export const INITIAL_EMPTY_ROW: PieceRow = {
+  id: "row-blank",
+  name: "",
+  length: "",
+  width: "",
+  qty: "1",
+  familyId: "",
+};
 
 export function emptyHardwareItem(): HardwareItem {
   return { id: newId(), name: "", qty: "1", unitPrice: "" };

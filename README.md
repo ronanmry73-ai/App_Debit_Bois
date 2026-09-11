@@ -1,6 +1,6 @@
 # Débit Bois
 
-Calculateur de débit de panneaux (2500 × 400 mm et 2500 × 600 mm), plans de découpe, devis HT/TTC et stocks atelier. Tout tourne dans le navigateur : débit, prix et stocks sont enregistrés en `localStorage`. Pas de compte, pas de base distante.
+Calculateur de débit de panneaux (références paramétrables, formats d’origine 2500 × 400 mm et 2500 × 600 mm conservés), plans de découpe, devis HT/TTC, stocks atelier et projets locaux. Tout tourne hors ligne : débit, prix, catalogue et projets sont enregistrés en `localStorage` (et, sous Electron, dans un fichier du dossier userData). Pas de compte, pas de base distante.
 
 ## Lancer en local
 
@@ -48,6 +48,9 @@ Aucune variable d’environnement n’est nécessaire. Le build est `npm run bui
 | Dossier | Rôle |
 |---|---|
 | `src/lib/packing.ts` | Calepinage 2D (MaxRects / Guillotine) |
+| `src/lib/catalog.ts` | Familles et références de panneaux |
+| `src/lib/projects.ts` | Projets enregistrés |
+| `src/lib/persist.ts` | Sauvegarde locale (localStorage + fichier Electron) |
 | `src/lib/pricing.ts` | Prix de vente, TVA |
 | `src/lib/stock.ts` | Stocks panneaux et quincaillerie |
 | `src/routes/index.tsx` | Page unique |

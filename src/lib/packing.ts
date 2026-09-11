@@ -1,35 +1,49 @@
 /**
- * Optimiseur de débit 2D pour panneaux 2500 × 400 et 2500 × 600 mm.
+ * Optimiseur de débit 2D.
+ *
+ * Les formats de panneaux ne sont plus figés : on reçoit la liste des
+ * références actives (par défaut 2500×400 et 2500×600, ids A et B).
  *
  * Deux algorithmes sont essayés, puis le meilleur rendement est retenu :
  *
  * 1. Rectangles maximaux (MaxRects, BSSF / BAF / Bottom-Left)
- *    On maintient la liste des rectangles libres (ils peuvent se chevaucher).
- *    Chaque pièce est placée dans le rectangle libre qui laisse le plus petit
- *    « petit côté » résiduel. Les rectangles libres sont ensuite découpés et
- *    les zones contenues dans d’autres sont éliminées. Très bon rendement,
- *    mais le plan peut exiger des coupes non traversantes.
- *
  * 2. Guillotine (First Fit, split sur le plus petit reliquat)
- *    Les zones libres ne se chevauchent jamais : chaque placement fend le
- *    rectangle en deux (coupe en L). Les plans se scient plus simplement
- *    (coupes droites successives), au prix d’un peu plus de chute parfois.
  *
- * Trait de scie (kerf) : chaque pièce et chaque panneau sont gonflés de
- * `kerf` mm. Les pièces se retrouvent donc séparées du trait de scie, et le
- * dernier bord du panneau n’est pas pénalisé d’un trait fantôme
- * (astuce classique : pièce+kerf dans panneau+kerf).
+ * Trait de scie (kerf) : pièce+kerf dans panneau+kerf.
  *
  * Stratégies comparées :
- *  - tout en 2500×400
- *  - tout en 2500×600
- *  - mixte (plusieurs heuristiques, on garde la plus économe en surface achetée)
+ *  - tout dans une référence donnée
+ *  - mixte (plusieurs heuristiques, on garde la plus économe en surface)
  */
 
-export type PanelFormat = "A" | "B";
+import type { PanelSpec } from "./catalog.ts";
 
+export type { PanelSpec };
+
+export type PanelFormat = string;
+
+export const DEFAULT_SPECS: PanelSpec[] = [
+  {
+    id: "A",
+    length: 2500,
+    width: 400,
+    label: "2500 × 400 mm",
+    familyId: "fam-standard",
+    familyName: "Standard",
+  },
+  {
+    id: "B",
+    length: 2500,
+    width: 600,
+    label: "2500 × 600 mm",
+    familyId: "fam-standard",
+    familyName: "Standard",
+  },
+];
+
+/** @deprecated Utiliser DEFAULT_SPECS — conservé pour les appels internes A/B. */
 export const PANEL_SPECS: Record<
-  PanelFormat,
+  "A" | "B",
   { length: number; width: number; label: string }
 > = {
   A: { length: 2500, width: 400, label: "2500 × 400 mm" },
@@ -37,7 +51,7 @@ export const PANEL_SPECS: Record<
 };
 
 export type PackMethod = "auto" | "guillotine" | "maxrects";
-export type StrategyId = "all-A" | "all-B" | "mixed";
+export type StrategyId = string;
 
 export type PieceDef = {
   id: string;
@@ -45,6 +59,9 @@ export type PieceDef = {
   length: number;
   width: number;
   qty: number;
+  familyId?: string | null;
+  familyName?: string | null;
+  allowedSpecIds?: string[] | null;
 };
 
 export type Item = {
@@ -53,6 +70,7 @@ export type Item = {
   name: string;
   w: number;
   h: number;
+  allowedSpecIds?: string[] | null;
 };
 
 export type Placement = {
@@ -72,6 +90,7 @@ export type PackedPanel = {
   format: PanelFormat;
   length: number;
   width: number;
+  label: string;
   placements: Placement[];
   usedArea: number;
   wasteArea: number;
@@ -83,7 +102,7 @@ export type StrategyResult = {
   id: StrategyId;
   label: string;
   panels: PackedPanel[];
-  counts: { A: number; B: number };
+  counts: Record<string, number>;
   purchasedArea: number;
   usedArea: number;
   wastePercent: number;
@@ -91,15 +110,24 @@ export type StrategyResult = {
   method: "maxrects" | "guillotine" | "mixte";
 };
 
+export type PackWarning = {
+  pieceId: string;
+  pieceName: string;
+  familyName: string;
+  message: string;
+};
+
 export type OptimizeOptions = {
   kerf: number;
   allowRotation: boolean;
   method: PackMethod;
+  specs?: PanelSpec[];
 };
 
 export type OptimizeOutput = {
   strategies: StrategyResult[];
   bestId: StrategyId;
+  warnings: PackWarning[];
 };
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -109,9 +137,17 @@ type Algo = "maxrects" | "guillotine";
 
 const EPS = 1e-6;
 
-function panelArea(format: PanelFormat): number {
-  const s = PANEL_SPECS[format];
-  return s.length * s.width;
+function resolveSpecs(options: OptimizeOptions): PanelSpec[] {
+  const specs = options.specs?.filter((s) => s.length > 0 && s.width > 0);
+  return specs && specs.length > 0 ? specs : DEFAULT_SPECS;
+}
+
+function specOf(specs: PanelSpec[], id: string): PanelSpec {
+  return specs.find((s) => s.id === id) ?? specs[0]!;
+}
+
+function panelArea(spec: PanelSpec): number {
+  return spec.length * spec.width;
 }
 
 export function explodePieces(defs: PieceDef[]): Item[] {
@@ -125,20 +161,20 @@ export function explodePieces(defs: PieceDef[]): Item[] {
         name: def.name.trim() || "Pièce",
         w: def.length,
         h: def.width,
+        allowedSpecIds: def.allowedSpecIds,
       });
     }
   }
   return items;
 }
 
-export function pieceFitsFormat(
+export function pieceFitsSpec(
   w: number,
   h: number,
-  format: PanelFormat,
+  spec: { length: number; width: number },
   allowRotation: boolean,
   kerf: number,
 ): boolean {
-  const spec = PANEL_SPECS[format];
   const binW = spec.length + kerf;
   const binH = spec.width + kerf;
   const iw = w + kerf;
@@ -148,16 +184,32 @@ export function pieceFitsFormat(
   return false;
 }
 
+export function pieceFitsFormat(
+  w: number,
+  h: number,
+  format: PanelFormat,
+  allowRotation: boolean,
+  kerf: number,
+  specs: PanelSpec[] = DEFAULT_SPECS,
+): boolean {
+  const spec = specOf(specs, format);
+  return pieceFitsSpec(w, h, spec, allowRotation, kerf);
+}
+
 export function pieceFitsAnyPanel(
   w: number,
   h: number,
   allowRotation: boolean,
   kerf: number,
+  specs: PanelSpec[] = DEFAULT_SPECS,
 ): boolean {
-  return (
-    pieceFitsFormat(w, h, "A", allowRotation, kerf) ||
-    pieceFitsFormat(w, h, "B", allowRotation, kerf)
-  );
+  return specs.some((s) => pieceFitsSpec(w, h, s, allowRotation, kerf));
+}
+
+/** `null` / `undefined` = toutes les refs ; `[]` = aucune (pas de repli silencieux). */
+function itemAllowedOn(item: Item, specId: string): boolean {
+  if (item.allowedSpecIds == null) return true;
+  return item.allowedSpecIds.includes(specId);
 }
 
 function sortItems(items: Item[], key: SortKey): Item[] {
@@ -202,7 +254,6 @@ function pruneContained(rects: Rect[]): Rect[] {
   return out;
 }
 
-/** Découpe MaxRects : jusqu’à 4 reliquats par rectangle libre chevauché. */
 function splitMaxRects(freeRects: Rect[], used: Rect): Rect[] {
   const result: Rect[] = [];
   for (const fr of freeRects) {
@@ -327,7 +378,7 @@ type BinAttempt = {
 };
 
 function packOneBin(
-  format: PanelFormat,
+  spec: PanelSpec,
   items: Item[],
   kerf: number,
   allowRotation: boolean,
@@ -335,7 +386,6 @@ function packOneBin(
   heuristic: Heuristic,
   sortKey: SortKey,
 ): BinAttempt {
-  const spec = PANEL_SPECS[format];
   const binW = spec.length + kerf;
   const binH = spec.width + kerf;
   let free: Rect[] = [{ x: 0, y: 0, w: binW, h: binH }];
@@ -344,6 +394,10 @@ function packOneBin(
   const leftover: Item[] = [];
 
   for (const item of ordered) {
+    if (!itemAllowedOn(item, spec.id)) {
+      leftover.push(item);
+      continue;
+    }
     const cands = collectCandidates(free, item, allowRotation, kerf, heuristic);
     const best = pickBestCandidate(cands);
     if (!best) {
@@ -372,10 +426,6 @@ function packOneBin(
   return { placements, remaining: leftover, method: algo, usedArea };
 }
 
-/**
- * Guillotine : le rectangle libre choisi est fendu en deux zones
- * non chevauchantes (le L est coupé selon le plus petit reliquat).
- */
 function splitGuillotine(freeRects: Rect[], used: Rect): Rect[] {
   const idx = freeRects.findIndex(
     (fr) =>
@@ -385,7 +435,6 @@ function splitGuillotine(freeRects: Rect[], used: Rect): Rect[] {
       fr.h + EPS >= used.h,
   );
   if (idx < 0) {
-    // repli : comportement MaxRects si on ne retrouve pas le rectangle source
     return splitMaxRects(freeRects, used);
   }
   const fr = freeRects[idx];
@@ -426,7 +475,7 @@ function algosFor(method: PackMethod): Algo[] {
 }
 
 function packOneBinBest(
-  format: PanelFormat,
+  spec: PanelSpec,
   items: Item[],
   options: OptimizeOptions,
 ): BinAttempt {
@@ -440,7 +489,7 @@ function packOneBinBest(
     for (const heuristic of hs) {
       for (const sortKey of sorts) {
         const attempt = packOneBin(
-          format,
+          spec,
           items,
           options.kerf,
           options.allowRotation,
@@ -461,20 +510,20 @@ function packOneBinBest(
 }
 
 function toPackedPanel(
-  format: PanelFormat,
+  spec: PanelSpec,
   index: number,
   attempt: BinAttempt,
 ): PackedPanel {
-  const spec = PANEL_SPECS[format];
   const usedArea = attempt.usedArea;
   const total = spec.length * spec.width;
   const wasteArea = Math.max(0, total - usedArea);
   return {
-    id: `${format}-${index}`,
+    id: `${spec.id}-${index}`,
     index,
-    format,
+    format: spec.id,
     length: spec.length,
     width: spec.width,
+    label: spec.label,
     placements: attempt.placements,
     usedArea,
     wasteArea,
@@ -492,7 +541,7 @@ function reindexPanels(panels: PackedPanel[]): PackedPanel[] {
 }
 
 function packAllBins(
-  format: PanelFormat,
+  spec: PanelSpec,
   items: Item[],
   options: OptimizeOptions,
 ): { panels: PackedPanel[]; unplaced: Item[] } {
@@ -501,12 +550,18 @@ function packAllBins(
   let guard = 0;
   while (remaining.length > 0 && guard < 500) {
     guard += 1;
-    const attempt = packOneBinBest(format, remaining, options);
+    const attempt = packOneBinBest(spec, remaining, options);
     if (attempt.placements.length === 0) break;
-    panels.push(toPackedPanel(format, panels.length + 1, attempt));
+    panels.push(toPackedPanel(spec, panels.length + 1, attempt));
     remaining = attempt.remaining;
   }
   return { panels, unplaced: remaining };
+}
+
+function emptyCounts(specs: PanelSpec[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const s of specs) counts[s.id] = 0;
+  return counts;
 }
 
 function finishStrategy(
@@ -514,12 +569,16 @@ function finishStrategy(
   label: string,
   panels: PackedPanel[],
   unplaced: Item[],
+  specs: PanelSpec[],
 ): StrategyResult {
-  const counts = {
-    A: panels.filter((p) => p.format === "A").length,
-    B: panels.filter((p) => p.format === "B").length,
-  };
-  const purchasedArea = counts.A * panelArea("A") + counts.B * panelArea("B");
+  const counts = emptyCounts(specs);
+  for (const p of panels) {
+    counts[p.format] = (counts[p.format] ?? 0) + 1;
+  }
+  const purchasedArea = panels.reduce(
+    (s, p) => s + p.length * p.width,
+    0,
+  );
   const usedArea = panels.reduce((s, p) => s + p.usedArea, 0);
   const wastePercent =
     purchasedArea > 0 ? ((purchasedArea - usedArea) / purchasedArea) * 100 : 0;
@@ -558,117 +617,149 @@ function pickCheapest(results: StrategyResult[]): StrategyResult {
   return best;
 }
 
-function onlyFitsB(item: Item, options: OptimizeOptions): boolean {
-  return (
-    !pieceFitsFormat(item.w, item.h, "A", options.allowRotation, options.kerf) &&
-    pieceFitsFormat(item.w, item.h, "B", options.allowRotation, options.kerf)
-  );
+function onlyFitsSpec(
+  item: Item,
+  spec: PanelSpec,
+  specs: PanelSpec[],
+  options: OptimizeOptions,
+): boolean {
+  if (!itemAllowedOn(item, spec.id)) return false;
+  if (!pieceFitsSpec(item.w, item.h, spec, options.allowRotation, options.kerf)) {
+    return false;
+  }
+  return specs.every((other) => {
+    if (other.id === spec.id) return true;
+    if (!itemAllowedOn(item, other.id)) return true;
+    return !pieceFitsSpec(
+      item.w,
+      item.h,
+      other,
+      options.allowRotation,
+      options.kerf,
+    );
+  });
 }
 
-type Prefer = "util" | "A" | "B";
-
 function chooseNextPanel(
-  a: BinAttempt,
-  b: BinAttempt,
+  attempts: { spec: PanelSpec; attempt: BinAttempt }[],
   remaining: Item[],
   options: OptimizeOptions,
-  prefer: Prefer,
-): { format: PanelFormat; attempt: BinAttempt } | null {
-  const aOk = a.placements.length > 0;
-  const bOk = b.placements.length > 0;
-  if (!aOk && !bOk) return null;
-  if (!aOk) return { format: "B", attempt: b };
-  if (!bOk) return { format: "A", attempt: a };
+  specs: PanelSpec[],
+  preferId?: string,
+): { spec: PanelSpec; attempt: BinAttempt } | null {
+  const ok = attempts.filter((a) => a.attempt.placements.length > 0);
+  if (ok.length === 0) return null;
 
-  const mustB = remaining.filter((it) => onlyFitsB(it, options));
-  if (mustB.length > 0) {
-    const mustIds = new Set(mustB.map((it) => it.instanceId));
-    const bGetsMust = b.placements.some((p) => mustIds.has(p.instanceId));
-    if (bGetsMust) return { format: "B", attempt: b };
+  for (const cand of ok) {
+    const must = remaining.filter((it) =>
+      onlyFitsSpec(it, cand.spec, specs, options),
+    );
+    if (must.length === 0) continue;
+    const mustIds = new Set(must.map((it) => it.instanceId));
+    if (cand.attempt.placements.some((p) => mustIds.has(p.instanceId))) {
+      return cand;
+    }
   }
 
-  if (prefer === "A") return { format: "A", attempt: a };
-  if (prefer === "B") return { format: "B", attempt: b };
+  if (preferId) {
+    const pref = ok.find((a) => a.spec.id === preferId);
+    if (pref) return pref;
+  }
 
-  const utilA = a.usedArea / panelArea("A");
-  const utilB = b.usedArea / panelArea("B");
-  if (Math.abs(utilA - utilB) > 0.02) {
-    return utilA > utilB ? { format: "A", attempt: a } : { format: "B", attempt: b };
+  let best = ok[0]!;
+  let bestUtil = best.attempt.usedArea / panelArea(best.spec);
+  for (const cand of ok.slice(1)) {
+    const util = cand.attempt.usedArea / panelArea(cand.spec);
+    if (util > bestUtil + 0.02) {
+      best = cand;
+      bestUtil = util;
+    } else if (Math.abs(util - bestUtil) <= 0.02) {
+      if (cand.attempt.usedArea > best.attempt.usedArea) {
+        best = cand;
+        bestUtil = util;
+      } else if (
+        cand.attempt.usedArea === best.attempt.usedArea &&
+        panelArea(cand.spec) < panelArea(best.spec)
+      ) {
+        best = cand;
+        bestUtil = util;
+      }
+    }
   }
-  // À utilisation proche, on prend le panneau qui pose le plus de surface,
-  // puis le plus étroit (moins de matière achetée pour ce coup).
-  if (a.usedArea !== b.usedArea) {
-    return a.usedArea > b.usedArea
-      ? { format: "A", attempt: a }
-      : { format: "B", attempt: b };
-  }
-  return { format: "A", attempt: a };
+  return best;
 }
 
 function packMixedGreedy(
   items: Item[],
   options: OptimizeOptions,
-  prefer: Prefer,
+  specs: PanelSpec[],
+  preferId?: string,
 ): { panels: PackedPanel[]; unplaced: Item[] } {
   const panels: PackedPanel[] = [];
   let remaining = items.slice();
   let guard = 0;
   while (remaining.length > 0 && guard < 500) {
     guard += 1;
-    const a = packOneBinBest("A", remaining, options);
-    const b = packOneBinBest("B", remaining, options);
-    const pick = chooseNextPanel(a, b, remaining, options, prefer);
+    const attempts = specs.map((spec) => ({
+      spec,
+      attempt: packOneBinBest(spec, remaining, options),
+    }));
+    const pick = chooseNextPanel(attempts, remaining, options, specs, preferId);
     if (!pick) break;
     const placedIds = new Set(pick.attempt.placements.map((p) => p.instanceId));
-    panels.push(toPackedPanel(pick.format, panels.length + 1, pick.attempt));
+    panels.push(toPackedPanel(pick.spec, panels.length + 1, pick.attempt));
     remaining = remaining.filter((it) => !placedIds.has(it.instanceId));
   }
   return { panels, unplaced: remaining };
 }
 
-function packMustBThen(
+function packMustThen(
   items: Item[],
   options: OptimizeOptions,
-  rest: "A" | "B" | "greedy",
+  specs: PanelSpec[],
+  exclusiveSpec: PanelSpec,
+  rest: "greedy" | string,
 ): { panels: PackedPanel[]; unplaced: Item[] } {
-  const must = items.filter((it) => onlyFitsB(it, options));
-  const others = items.filter((it) => !onlyFitsB(it, options));
-  // On nourrit d’abord les panneaux B avec les pièces qui n’entrent qu’en 600,
-  // en autorisant le remplissage avec d’autres pièces pour limiter la chute.
-  const seed = must.concat(others);
   const panels: PackedPanel[] = [];
-  let remaining = seed;
-  // Tant qu’il reste des pièces « B only », on ouvre un panneau B.
-  while (remaining.some((it) => onlyFitsB(it, options))) {
-    const attempt = packOneBinBest("B", remaining, options);
+  let remaining = items.slice();
+  while (remaining.some((it) => onlyFitsSpec(it, exclusiveSpec, specs, options))) {
+    const attempt = packOneBinBest(exclusiveSpec, remaining, options);
     if (attempt.placements.length === 0) break;
     const placedIds = new Set(attempt.placements.map((p) => p.instanceId));
-    panels.push(toPackedPanel("B", panels.length + 1, attempt));
+    panels.push(toPackedPanel(exclusiveSpec, panels.length + 1, attempt));
     remaining = remaining.filter((it) => !placedIds.has(it.instanceId));
   }
   if (remaining.length === 0) return { panels, unplaced: [] };
   const restPack =
-    rest === "A" || rest === "B"
-      ? packAllBins(rest, remaining, options)
-      : packMixedGreedy(remaining, options, "util");
-  const merged = reindexPanels(panels.concat(restPack.panels));
-  return { panels: merged, unplaced: restPack.unplaced };
+    rest === "greedy"
+      ? packMixedGreedy(remaining, options, specs)
+      : packAllBins(specOf(specs, rest), remaining, options);
+  return {
+    panels: reindexPanels(panels.concat(restPack.panels)),
+    unplaced: restPack.unplaced,
+  };
 }
 
 function packMixedBest(
   items: Item[],
   options: OptimizeOptions,
+  specs: PanelSpec[],
 ): { panels: PackedPanel[]; unplaced: Item[] } {
-  const variants = [
-    packMixedGreedy(items, options, "util"),
-    packMixedGreedy(items, options, "A"),
-    packMixedGreedy(items, options, "B"),
-    packMustBThen(items, options, "greedy"),
-    packMustBThen(items, options, "A"),
-    packMustBThen(items, options, "B"),
+  const variants: { panels: PackedPanel[]; unplaced: Item[] }[] = [
+    packMixedGreedy(items, options, specs),
+    ...specs.map((s) => packMixedGreedy(items, options, specs, s.id)),
   ];
+  const pairRest = specs.length <= 3;
+  for (const spec of specs) {
+    variants.push(packMustThen(items, options, specs, spec, "greedy"));
+    if (!pairRest) continue;
+    for (const other of specs) {
+      if (other.id === spec.id) continue;
+      variants.push(packMustThen(items, options, specs, spec, other.id));
+    }
+  }
   const scored = variants.map((v, i) =>
-    finishStrategy("mixed", `mixte-${i}`, v.panels, v.unplaced),
+    finishStrategy("mixed", `mixte-${i}`, v.panels, v.unplaced, specs),
   );
   const best = pickCheapest(scored);
   const idx = scored.indexOf(best);
@@ -676,8 +767,20 @@ function packMixedBest(
 }
 
 function scoreStrategy(result: StrategyResult): number {
-  // Plus petit = meilleur. Pénalité lourde si des pièces restent dehors.
   return result.purchasedArea + result.unplaced.length * 1e12 + result.wastePercent;
+}
+
+function familyWarning(
+  def: PieceDef,
+  familyName: string,
+): PackWarning {
+  const name = def.name.trim() || "Pièce";
+  return {
+    pieceId: def.id,
+    pieceName: name,
+    familyName,
+    message: `Aucun panneau actif compatible n’a été trouvé dans la famille ${familyName} pour la pièce ${name}. Veuillez ajouter une référence compatible ou choisir une autre famille.`,
+  };
 }
 
 export function optimizeCutting(
@@ -685,30 +788,65 @@ export function optimizeCutting(
   options: OptimizeOptions,
 ): OptimizeOutput {
   const kerf = Math.max(0, options.kerf);
-  const opts: OptimizeOptions = { ...options, kerf };
-  const items = explodePieces(
-    defs.filter((d) => d.length > 0 && d.width > 0 && d.qty > 0),
+  const specs = resolveSpecs(options);
+  const opts: OptimizeOptions = { ...options, kerf, specs };
+  const warnings: PackWarning[] = [];
+
+  const prepared: PieceDef[] = defs
+    .filter((d) => d.length > 0 && d.width > 0 && d.qty > 0)
+    .map((d) => {
+      if (d.allowedSpecIds && d.allowedSpecIds.length > 0) {
+        const ok = d.allowedSpecIds.filter((id) => specs.some((s) => s.id === id));
+        if (ok.length === 0) {
+          const fam =
+            d.familyName ||
+            specs.find((s) => s.familyId === d.familyId)?.familyName ||
+            "sélectionnée";
+          warnings.push(familyWarning(d, fam));
+        }
+        return { ...d, allowedSpecIds: ok.length > 0 ? ok : [] };
+      }
+      if (d.familyId) {
+        const famSpecs = specs.filter((s) => s.familyId === d.familyId);
+        const compatible = famSpecs.filter((s) =>
+          pieceFitsSpec(d.length, d.width, s, opts.allowRotation, kerf),
+        );
+        if (compatible.length === 0) {
+          const fam = d.familyName || famSpecs[0]?.familyName || "sélectionnée";
+          warnings.push(familyWarning(d, fam));
+          return { ...d, allowedSpecIds: [] };
+        }
+        return { ...d, allowedSpecIds: compatible.map((s) => s.id) };
+      }
+      return { ...d, allowedSpecIds: null };
+    });
+
+  const items = explodePieces(prepared);
+
+  const allStrategies: StrategyResult[] = specs.map((spec) => {
+    const packed = packAllBins(spec, items, opts);
+    return finishStrategy(
+      `all-${spec.id}`,
+      `Tout en ${spec.label}`,
+      packed.panels,
+      packed.unplaced,
+      specs,
+    );
+  });
+
+  const mixed = packMixedBest(items, opts, specs);
+  allStrategies.push(
+    finishStrategy("mixed", "Mixte", mixed.panels, mixed.unplaced, specs),
   );
 
-  const allA = packAllBins("A", items, opts);
-  const allB = packAllBins("B", items, opts);
-  const mixed = packMixedBest(items, opts);
-
-  const strategies: StrategyResult[] = [
-    finishStrategy("all-A", "Tout en 2500 × 400", allA.panels, allA.unplaced),
-    finishStrategy("all-B", "Tout en 2500 × 600", allB.panels, allB.unplaced),
-    finishStrategy("mixed", "Mixte 400 + 600", mixed.panels, mixed.unplaced),
-  ];
-
-  let best = strategies[0]!;
-  for (const s of strategies.slice(1)) {
+  let best = allStrategies[0]!;
+  for (const s of allStrategies.slice(1)) {
     if (scoreStrategy(s) < scoreStrategy(best)) best = s;
   }
 
-  return { strategies, bestId: best.id };
+  return { strategies: allStrategies, bestId: best.id, warnings };
 }
 
-/** Vérifie qu’un plan n’a pas de chevauchement ni de débordement. */
 export function assertValidLayout(panel: PackedPanel, kerf: number): string[] {
   const errors: string[] = [];
   const inflated = panel.placements.map((p) => ({

@@ -1,4 +1,4 @@
-import { PANEL_SPECS, type PackedPanel, type Placement } from "@/lib/packing";
+import type { PackedPanel, Placement } from "@/lib/packing";
 import { formatPct, cn } from "@/lib/utils";
 
 const FILLS = [
@@ -34,14 +34,14 @@ export function CuttingPlan({
   const pad = 56;
   const viewW = panel.length + pad * 2;
   const viewH = panel.width + pad * 2;
-  const spec = PANEL_SPECS[panel.format];
+  const specLabel = panel.label || `${panel.length} × ${panel.width} mm`;
   const hatchId = `hatch-${panel.id}`;
 
   return (
     <article className="print-break rounded-xl bg-card p-4 shadow-[var(--shadow-border)]">
       <header className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-display text-base font-medium">
-          Panneau {panel.index} · {spec.label}
+          Panneau {panel.index} · {specLabel}
         </h3>
         <p className="text-sm tabular-nums text-muted-foreground">
           {panel.placements.length} pièce{panel.placements.length > 1 ? "s" : ""} · chute{" "}
@@ -58,7 +58,7 @@ export function CuttingPlan({
           <svg
             viewBox={`0 0 ${viewW} ${viewH}`}
             role="img"
-            aria-label={`Plan de découpe du panneau ${panel.index} ${spec.label}`}
+            aria-label={`Plan de découpe du panneau ${panel.index} ${specLabel}`}
             className="block h-auto w-full"
           >
           <defs>

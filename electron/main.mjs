@@ -1,6 +1,7 @@
-import { app, BrowserWindow, Menu, shell, dialog } from "electron";
+import { app, BrowserWindow, Menu, shell, dialog, ipcMain } from "electron";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -233,7 +234,60 @@ async function createWindow(url) {
 
 app.setName("Débit Bois");
 
+function storePath() {
+  return path.join(app.getPath("userData"), "debit-bois-store.json");
+}
+
+function registerStoreIpc() {
+  ipcMain.handle("debit-bois:read-store", async () => {
+    try {
+      return await readFile(storePath(), "utf8");
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle("debit-bois:write-store", async (_event, json) => {
+    if (typeof json !== "string") return false;
+    await mkdir(path.dirname(storePath()), { recursive: true });
+    await writeFile(storePath(), json, "utf8");
+    return true;
+  });
+
+  ipcMain.handle("debit-bois:export-file", async (_event, suggestedName, content) => {
+    const win = BrowserWindow.getFocusedWindow() || mainWindow;
+    const defaultName =
+      typeof suggestedName === "string" && suggestedName.trim()
+        ? suggestedName.trim()
+        : "projet-debit-bois.json";
+    const { canceled, filePath } = await dialog.showSaveDialog(win ?? undefined, {
+      title: "Exporter le projet",
+      defaultPath: defaultName.endsWith(".json") ? defaultName : `${defaultName}.json`,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (canceled || !filePath) return false;
+    await writeFile(filePath, String(content ?? ""), "utf8");
+    return true;
+  });
+
+  ipcMain.handle("debit-bois:import-file", async () => {
+    const win = BrowserWindow.getFocusedWindow() || mainWindow;
+    const { canceled, filePaths } = await dialog.showOpenDialog(win ?? undefined, {
+      title: "Importer un projet",
+      properties: ["openFile"],
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (canceled || !filePaths?.[0]) return null;
+    try {
+      return await readFile(filePaths[0], "utf8");
+    } catch {
+      return null;
+    }
+  });
+}
+
 app.whenReady().then(async () => {
+  registerStoreIpc();
   buildMenu();
   try {
     const url = process.env.DEBIT_BOIS_URL

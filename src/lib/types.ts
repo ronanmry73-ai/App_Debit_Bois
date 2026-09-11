@@ -6,6 +6,8 @@ export type PieceRow = {
   length: string;
   width: string;
   qty: string;
+  /** Famille prioritaire, vide = règles générales. */
+  familyId?: string;
 };
 
 export type HardwareItem = {

@@ -4,7 +4,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { emptyRow } from "@/lib/presets";
 import type { PieceRow } from "@/lib/types";
+import type { PanelSpec } from "@/lib/packing";
 import { pieceFitsAnyPanel } from "@/lib/packing";
+import { compatibleRefs, type Catalog, type PanelFamily } from "@/lib/catalog";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -12,6 +14,9 @@ type Props = {
   onChange: (rows: PieceRow[]) => void;
   kerf: number;
   allowRotation: boolean;
+  families: PanelFamily[];
+  catalog: Catalog;
+  specs: PanelSpec[];
 };
 
 function parseNum(s: string): number {
@@ -19,7 +24,15 @@ function parseNum(s: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-export function PieceList({ rows, onChange, kerf, allowRotation }: Props) {
+export function PieceList({
+  rows,
+  onChange,
+  kerf,
+  allowRotation,
+  families,
+  catalog,
+  specs,
+}: Props) {
   function update(id: string, patch: Partial<PieceRow>) {
     onChange(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
@@ -48,7 +61,8 @@ export function PieceList({ rows, onChange, kerf, allowRotation }: Props) {
             Débit des pièces
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Dimensions en millimètres. {totalQty} pièce{totalQty > 1 ? "s" : ""} ·{" "}
+            Dimensions en millimètres. Famille prioritaire facultative. {totalQty} pièce
+            {totalQty > 1 ? "s" : ""} ·{" "}
             {(totalArea / 1_000_000).toLocaleString("fr-FR", {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,
@@ -71,9 +85,10 @@ export function PieceList({ rows, onChange, kerf, allowRotation }: Props) {
           <thead>
             <tr className="border-b border-border bg-muted/60 text-left text-muted-foreground">
               <th className="px-3 py-2.5 font-medium">Nom</th>
-              <th className="w-32 px-3 py-2.5 font-medium">Longueur</th>
-              <th className="w-32 px-3 py-2.5 font-medium">Largeur</th>
-              <th className="w-24 px-3 py-2.5 font-medium">Qté</th>
+              <th className="w-28 px-3 py-2.5 font-medium">Longueur</th>
+              <th className="w-28 px-3 py-2.5 font-medium">Largeur</th>
+              <th className="w-20 px-3 py-2.5 font-medium">Qté</th>
+              <th className="w-40 px-3 py-2.5 font-medium">Famille prioritaire</th>
               <th className="w-12 px-3 py-2.5">
                 <span className="sr-only">Supprimer</span>
               </th>
@@ -86,6 +101,9 @@ export function PieceList({ rows, onChange, kerf, allowRotation }: Props) {
                 row={row}
                 kerf={kerf}
                 allowRotation={allowRotation}
+                families={families}
+                catalog={catalog}
+                specs={specs}
                 onChange={(patch) => update(row.id, patch)}
                 onRemove={() => remove(row.id)}
               />
@@ -144,12 +162,58 @@ export function PieceList({ rows, onChange, kerf, allowRotation }: Props) {
                 onChange={(v) => update(row.id, { qty: v })}
                 integer
               />
+              <div>
+                <Label htmlFor={`fam-${row.id}`}>Famille prioritaire</Label>
+                <FamilySelect
+                  id={`fam-${row.id}`}
+                  value={row.familyId ?? ""}
+                  families={families}
+                  onChange={(familyId) => update(row.id, { familyId })}
+                />
+              </div>
             </div>
-            <FitHint row={row} kerf={kerf} allowRotation={allowRotation} />
+            <FitHint
+              row={row}
+              kerf={kerf}
+              allowRotation={allowRotation}
+              catalog={catalog}
+              specs={specs}
+              families={families}
+            />
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+
+function FamilySelect({
+  id,
+  value,
+  families,
+  onChange,
+}: {
+  id?: string;
+  value: string;
+  families: PanelFamily[];
+  onChange: (id: string) => void;
+}) {
+  return (
+    <select
+      id={id}
+      aria-label="Famille prioritaire"
+      className="mt-1 flex h-11 w-full rounded-md border border-input bg-card px-2 text-sm"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">Aucune</option>
+      {families.filter((f) => f.active || f.id === value).map((f) => (
+        <option key={f.id} value={f.id}>
+          {f.name}
+          {!f.active ? " (inactive)" : ""}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -186,21 +250,28 @@ function PieceTableRow({
   row,
   kerf,
   allowRotation,
+  families,
+  catalog,
+  specs,
   onChange,
   onRemove,
 }: {
   row: PieceRow;
   kerf: number;
   allowRotation: boolean;
+  families: PanelFamily[];
+  catalog: Catalog;
+  specs: PanelSpec[];
   onChange: (patch: Partial<PieceRow>) => void;
   onRemove: () => void;
 }) {
   const l = parseNum(row.length);
   const w = parseNum(row.width);
-  const invalid =
-    (l > 0 && w > 0 && !pieceFitsAnyPanel(l, w, allowRotation, kerf));
+  const familyHint = familyFitMessage(row, l, w, kerf, allowRotation, catalog, families, specs);
+  const invalid = Boolean(familyHint);
 
   return (
+    <>
     <tr className="border-b border-border last:border-0">
       <td className="px-2 py-1.5">
         <Input
@@ -238,6 +309,13 @@ function PieceTableRow({
           className="h-10 tabular-nums"
         />
       </td>
+      <td className="px-2 py-1.5">
+        <FamilySelect
+          value={row.familyId ?? ""}
+          families={families}
+          onChange={(familyId) => onChange({ familyId })}
+        />
+      </td>
       <td className="px-1 py-1.5">
         <Button
           type="button"
@@ -250,25 +328,59 @@ function PieceTableRow({
         </Button>
       </td>
     </tr>
+    {familyHint && (
+      <tr className="border-b border-border last:border-0">
+        <td colSpan={6} className="px-3 pb-2 text-xs text-destructive">
+          {familyHint}
+        </td>
+      </tr>
+    )}
+    </>
   );
+}
+
+function familyFitMessage(
+  row: PieceRow,
+  l: number,
+  w: number,
+  kerf: number,
+  allowRotation: boolean,
+  catalog: Catalog,
+  families: PanelFamily[],
+  specs: PanelSpec[],
+): string | null {
+  if (l <= 0 || w <= 0) return null;
+  if (row.familyId) {
+    const fam = families.find((f) => f.id === row.familyId);
+    const ok = compatibleRefs(catalog, l, w, allowRotation, kerf, row.familyId);
+    if (ok.length === 0) {
+      const piece = row.name.trim() || "sans nom";
+      return `Aucun panneau actif compatible n’a été trouvé dans la famille ${fam?.name ?? "sélectionnée"} pour la pièce ${piece}. Veuillez ajouter une référence compatible ou choisir une autre famille.`;
+    }
+    return null;
+  }
+  if (pieceFitsAnyPanel(l, w, allowRotation, kerf, specs)) return null;
+  return "Cette pièce ne rentre dans aucun panneau actif.";
 }
 
 function FitHint({
   row,
   kerf,
   allowRotation,
+  catalog,
+  specs,
+  families,
 }: {
   row: PieceRow;
   kerf: number;
   allowRotation: boolean;
+  catalog: Catalog;
+  specs: PanelSpec[];
+  families: PanelFamily[];
 }) {
   const l = parseNum(row.length);
   const w = parseNum(row.width);
-  if (l <= 0 || w <= 0) return null;
-  if (pieceFitsAnyPanel(l, w, allowRotation, kerf)) return null;
-  return (
-    <p className="mt-2 text-xs text-destructive">
-      Cette pièce ne rentre dans aucun panneau (max 2500 × 600 mm).
-    </p>
-  );
+  const msg = familyFitMessage(row, l, w, kerf, allowRotation, catalog, families, specs);
+  if (!msg) return null;
+  return <p className="mt-2 text-xs text-destructive">{msg}</p>;
 }

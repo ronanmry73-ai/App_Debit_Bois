@@ -62,10 +62,22 @@ Vous pouvez aussi lancer le workflow GitHub Actions **Desktop packages**
 
 ## Données
 
-Débits, devis et stocks restent dans `localStorage` du moteur Chromium
-d’Electron / de la PWA. Ce n’est pas un fichier `.json` à part.
+Tout reste **local**, hors ligne, sans compte.
 
-Pour sauvegarder : Imprimer / PDF, ou plus tard exporter depuis l’UI.
+| Contexte | Emplacement |
+|---|---|
+| Navigateur / PWA | `localStorage`, clé `debit-bois-v5` (migration auto depuis `debit-bois-v4`) |
+| Electron | Fichier `debit-bois-store.json` dans le dossier **userData** de l’application, *et* `localStorage` en miroir |
+
+Sur Windows, le fichier Electron se trouve typiquement dans :
+
+`%APPDATA%\Débit Bois\debit-bois-store.json`
+
+(ou `%APPDATA%\app-builder-workspace\` selon le nom interne d’Electron.)
+
+Ce fichier contient le catalogue (familles + références), la liste des projets, le projet en cours et la session. Fermer ou relancer l’app ne perd pas le travail : la session est enregistrée automatiquement.
+
+Export / import d’un projet : fichier JSON (dialogue natif dans Electron, téléchargement dans le navigateur).
 
 ## Limites
 

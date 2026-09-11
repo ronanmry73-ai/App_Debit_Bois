@@ -12,7 +12,7 @@
  *   8. Prix_vente_TTC = Prix_vente_HT + TVA
  *
  * ------------------------------------------------------------------
- * Exemple chiffré (bouton « Exemple devis ») :
+ * Exemple chiffré :
  *
  *   Prix d'achat fournisseur : 40 €/m²
  *   Surface nécessaire       : 2 m²
@@ -31,7 +31,7 @@
  * ------------------------------------------------------------------
  */
 
-import { PANEL_SPECS, type StrategyResult } from "./packing.ts";
+import { DEFAULT_SPECS, type PanelSpec, type StrategyResult } from "./packing.ts";
 import type { HardwareItem } from "./types.ts";
 
 export type SellingInput = {
@@ -74,7 +74,7 @@ export type HardwareLine = {
 };
 
 export type PanelBuyLine = {
-  format: "A" | "B";
+  format: string;
   label: string;
   dims: string;
   qty: number;
@@ -113,27 +113,39 @@ export function sumHardware(items: HardwareItem[]): number {
 }
 
 export function panelBuyLines(
-  counts: { A: number; B: number },
+  counts: Record<string, number>,
   pricePerM2: number,
+  specs: PanelSpec[] = DEFAULT_SPECS,
 ): PanelBuyLine[] {
   const price = Math.max(0, pricePerM2);
   const out: PanelBuyLine[] = [];
-  (["A", "B"] as const).forEach((format) => {
-    const qty = counts[format];
-    if (qty <= 0) return;
-    const spec = PANEL_SPECS[format];
+  for (const spec of specs) {
+    const qty = counts[spec.id] ?? 0;
+    if (qty <= 0) continue;
     const areaM2 = (spec.length * spec.width) / 1_000_000;
     const unitPrice = roundCents(areaM2 * price);
     out.push({
-      format,
+      format: spec.id,
       label: `Panneau ${spec.label}`,
-      dims: spec.label,
+      dims: `${spec.length} × ${spec.width} mm`,
       qty,
       areaM2,
       unitPrice,
       subtotal: roundCents(qty * unitPrice),
     });
-  });
+  }
+  for (const [id, qty] of Object.entries(counts)) {
+    if (qty <= 0 || specs.some((s) => s.id === id)) continue;
+    out.push({
+      format: id,
+      label: `Panneau ${id}`,
+      dims: id,
+      qty,
+      areaM2: 0,
+      unitPrice: 0,
+      subtotal: 0,
+    });
+  }
   return out;
 }
 

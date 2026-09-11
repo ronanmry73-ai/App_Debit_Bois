@@ -9,6 +9,7 @@
  */
 
 import type { HardwareItem } from "./types.ts";
+import type { Catalog, PanelRef } from "./catalog.ts";
 import { hardwareLines, parseAmount } from "./pricing.ts";
 import { newId } from "./utils.ts";
 
@@ -43,6 +44,7 @@ export type StockMove = {
 export type JobNeed = {
   panelsA: number;
   panelsB: number;
+  panels?: { specId: string; name: string; qty: number }[];
   hardware: { name: string; qty: number }[];
 };
 
@@ -88,12 +90,39 @@ export function findByName(items: StockItem[], name: string): StockItem | undefi
 }
 
 export function jobNeedFromQuote(
-  counts: { A: number; B: number },
+  counts: { A?: number; B?: number } & Record<string, number>,
   hardware: HardwareItem[],
+  specLabels?: Record<string, string>,
 ): JobNeed {
+  const panelsA = Math.max(0, counts.A ?? 0);
+  const panelsB = Math.max(0, counts.B ?? 0);
+  const panels: JobNeed["panels"] = [];
+  for (const [specId, qty] of Object.entries(counts)) {
+    if (qty <= 0) continue;
+    const fallback =
+      specId === "A"
+        ? "Panneau 2500 × 400 mm"
+        : specId === "B"
+          ? "Panneau 2500 × 600 mm"
+          : `Panneau ${specId}`;
+    panels.push({
+      specId,
+      name: specLabels?.[specId] ?? fallback,
+      qty,
+    });
+  }
+  if (panels.length === 0) {
+    if (panelsA > 0) {
+      panels.push({ specId: "A", name: "Panneau 2500 × 400 mm", qty: panelsA });
+    }
+    if (panelsB > 0) {
+      panels.push({ specId: "B", name: "Panneau 2500 × 600 mm", qty: panelsB });
+    }
+  }
   return {
-    panelsA: Math.max(0, counts.A),
-    panelsB: Math.max(0, counts.B),
+    panelsA,
+    panelsB,
+    panels,
     hardware: hardwareLines(hardware)
       .filter((l) => l.qty > 0 && l.name)
       .map((l) => ({ name: l.name, qty: l.qty })),
@@ -122,6 +151,19 @@ export function coverage(items: StockItem[], need: JobNeed): NeedLine[] {
       needed: need.panelsB,
       onHand: b?.qty ?? 0,
       gap: Math.max(0, need.panelsB - (b?.qty ?? 0)),
+    });
+  }
+  for (const p of need.panels ?? []) {
+    if (p.specId === "A" || p.specId === "B") continue;
+    const found =
+      items.find((it) => it.id === p.specId) ?? findByName(items, p.name);
+    lines.push({
+      key: `panel-${p.specId}`,
+      itemId: found?.id ?? null,
+      name: p.name,
+      needed: p.qty,
+      onHand: found?.qty ?? 0,
+      gap: Math.max(0, p.qty - (found?.qty ?? 0)),
     });
   }
   for (const h of need.hardware) {
@@ -307,6 +349,37 @@ export function ensurePanelRows(items: StockItem[]): StockItem[] {
     if (!findPanel(next, row.kind === "panel-A" ? "A" : "B")) {
       next = [row, ...next];
     }
+  }
+  return next;
+}
+
+export function stockIdForRef(ref: PanelRef): string {
+  if (ref.id === "A") return PANEL_A_ID;
+  if (ref.id === "B") return PANEL_B_ID;
+  return ref.id;
+}
+
+export function syncStockWithCatalog(
+  items: StockItem[],
+  catalog: Catalog,
+): StockItem[] {
+  let next = ensurePanelRows(items);
+  for (const ref of catalog.refs) {
+    const id = stockIdForRef(ref);
+    if (next.some((it) => it.id === id)) continue;
+    next = [
+      ...next,
+      {
+        id,
+        kind: ref.id === "A" ? "panel-A" : ref.id === "B" ? "panel-B" : "other",
+        name: `Panneau ${ref.length} × ${ref.width} mm`,
+        sku: ref.name,
+        qty: 0,
+        unit: "pièce",
+        unitCost: 0,
+        minQty: 0,
+      },
+    ];
   }
   return next;
 }

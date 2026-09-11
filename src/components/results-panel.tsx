@@ -1,7 +1,7 @@
 import { Check, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import type { StrategyId, StrategyResult } from "@/lib/packing";
+import type { PanelSpec, StrategyId, StrategyResult } from "@/lib/packing";
 import { findPanel, type StockItem } from "@/lib/stock";
 import { formatArea, formatEuro, formatPct, cn } from "@/lib/utils";
 
@@ -12,7 +12,16 @@ type Props = {
   onSelect: (id: StrategyId) => void;
   pricePerM2: number;
   stock?: StockItem[];
+  specs?: PanelSpec[];
 };
+
+function countTotal(counts: Record<string, number>): number {
+  return Object.values(counts).reduce((s, n) => s + n, 0);
+}
+
+function specLabel(id: string, specs: PanelSpec[]): string {
+  return specs.find((s) => s.id === id)?.label ?? id;
+}
 
 export function ResultsPanel({
   strategies,
@@ -21,11 +30,10 @@ export function ResultsPanel({
   onSelect,
   pricePerM2,
   stock = [],
+  specs = [],
 }: Props) {
   const current = strategies.find((s) => s.id === selected) ?? strategies[0];
   if (!current) return null;
-  const onHandA = findPanel(stock, "A")?.qty ?? 0;
-  const onHandB = findPanel(stock, "B")?.qty ?? 0;
 
   return (
     <section aria-labelledby="resultats-title" className="flex flex-col gap-4">
@@ -43,6 +51,11 @@ export function ResultsPanel({
           const isBest = s.id === bestId;
           const isSel = s.id === selected;
           const achat = (s.purchasedArea / 1_000_000) * pricePerM2;
+          const total = countTotal(s.counts);
+          const mix = Object.entries(s.counts)
+            .filter(([, n]) => n > 0)
+            .map(([id, n]) => `${n} × ${specLabel(id, specs)}`)
+            .join(" · ");
           return (
             <button
               key={s.id}
@@ -64,14 +77,12 @@ export function ResultsPanel({
                 )}
               </div>
               <p className="mt-3 font-display text-3xl font-medium tabular-nums tracking-tight">
-                {s.counts.A + s.counts.B}
+                {total}
                 <span className="ml-1.5 text-base font-normal text-muted-foreground">
-                  panneau{s.counts.A + s.counts.B > 1 ? "x" : ""}
+                  panneau{total > 1 ? "x" : ""}
                 </span>
               </p>
-              <p className="mt-1 text-sm tabular-nums text-muted-foreground">
-                {s.counts.A} × 400 mm · {s.counts.B} × 600 mm
-              </p>
+              <p className="mt-1 text-sm tabular-nums text-muted-foreground">{mix}</p>
               <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
                 <div>
                   <dt className="text-muted-foreground">Surface achetée</dt>
@@ -102,22 +113,31 @@ export function ResultsPanel({
         <CardContent className="p-5">
           <h3 className="font-display text-base font-medium">À acheter — {current.label}</h3>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <BuyStat
-              label="Panneaux 2500 × 400 mm"
-              value={current.counts.A}
-              onHand={onHandA}
-            />
-            <BuyStat
-              label="Panneaux 2500 × 600 mm"
-              value={current.counts.B}
-              onHand={onHandB}
-            />
+            {Object.entries(current.counts)
+              .filter(([, n]) => n > 0)
+              .map(([id, n]) => {
+                const spec = specs.find((s) => s.id === id);
+                const hand =
+                  id === "A" || id === "B"
+                    ? (findPanel(stock, id)?.qty ?? 0)
+                    : (stock.find((it) => it.id === id)?.qty ?? 0);
+                const gap = Math.max(0, n - hand);
+                return (
+                  <BuyStat
+                    key={id}
+                    label={`Panneaux ${spec?.label ?? id}`}
+                    value={n}
+                    onHand={hand}
+                    gap={gap}
+                  />
+                );
+              })}
           </div>
           <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-border pt-4 text-sm sm:grid-cols-4">
             <div>
               <dt className="text-muted-foreground">Total panneaux</dt>
               <dd className="text-lg font-medium tabular-nums">
-                {current.counts.A + current.counts.B}
+                {countTotal(current.counts)}
               </dd>
             </div>
             <div>
@@ -147,23 +167,25 @@ function BuyStat({
   label,
   value,
   onHand,
+  gap,
 }: {
   label: string;
   value: number;
-  onHand: number;
+  onHand?: number;
+  gap?: number;
 }) {
-  const gap = Math.max(0, value - onHand);
   return (
     <div className="rounded-lg bg-muted/70 px-4 py-3">
       <p className="text-sm text-muted-foreground">{label}</p>
       <p className="mt-1 font-display text-4xl font-medium tabular-nums tracking-tight">
         {value}
       </p>
-      <p className="mt-1 text-xs tabular-nums text-muted-foreground">
-        stock {onHand}
-        {value > 0 && gap === 0 ? " · couvert" : ""}
-        {gap > 0 ? ` · à commander ${gap}` : ""}
-      </p>
+      {onHand != null && (
+        <p className="text-xs text-muted-foreground">
+          stock {onHand}
+          {gap && gap > 0 ? ` · à commander ${gap}` : " · couvert"}
+        </p>
+      )}
     </div>
   );
 }

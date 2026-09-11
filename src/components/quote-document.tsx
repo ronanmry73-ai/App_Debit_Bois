@@ -11,7 +11,7 @@ import {
   type SellingOk,
 } from "@/lib/pricing";
 import type { AppSettings, HardwareItem } from "@/lib/types";
-import type { StrategyResult } from "@/lib/packing";
+import type { PanelSpec, StrategyResult } from "@/lib/packing";
 import type { StockItem } from "@/lib/stock";
 import { coverage, jobNeedFromQuote, toOrder } from "@/lib/stock";
 import { formatArea, formatEuro, formatPct } from "@/lib/utils";
@@ -22,6 +22,7 @@ type Props = {
   selling: SellingOk;
   strategy: StrategyResult;
   stock?: StockItem[];
+  specs?: PanelSpec[];
 };
 
 export function QuoteDocument({
@@ -30,8 +31,9 @@ export function QuoteDocument({
   selling,
   strategy,
   stock = [],
+  specs,
 }: Props) {
-  const panels = panelBuyLines(strategy.counts, settings.pricePerM2);
+  const panels = panelBuyLines(strategy.counts, settings.pricePerM2, specs);
   const hw = hardwareLines(settings.hardwareItems).filter(
     (l) => l.name || l.qty > 0 || l.unitPrice > 0,
   );
@@ -473,7 +475,7 @@ function DefaultMark() {
 
 function stockNote(
   stock: StockItem[],
-  counts: { A: number; B: number },
+  counts: Record<string, number>,
   hardware: HardwareItem[],
 ): string {
   if (stock.length === 0) return "";
