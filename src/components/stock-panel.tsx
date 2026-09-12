@@ -12,7 +12,6 @@ import {
   applyDelta,
   emptyOffcutItem,
   emptyStockItem,
-  exampleStock,
   isPlaceholderDate,
   recordMove,
   stockStatus,
@@ -180,16 +179,6 @@ export function StockPanel({
               >
                 <Plus />
                 Chute
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  onItems(exampleStock());
-                  setMessage("Exemple de stock rechargé.");
-                }}
-              >
-                Exemple stock
               </Button>
             </div>
           </div>
