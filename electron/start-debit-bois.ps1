@@ -57,17 +57,18 @@ if (-not (Test-PortOpen 8080)) {
 }
 
 $env:DEBIT_BOIS_URL = "http://127.0.0.1:8080"
-$electron = Join-Path $Root "node_modules\electron\cli.js"
-$node = (Get-Command node.exe -ErrorAction SilentlyContinue)
-if (-not $node) {
+$electronExe = Join-Path $Root "node_modules\electron\dist\electron.exe"
+if (-not (Test-Path $electronExe)) {
   Add-Type -AssemblyName System.Windows.Forms
-  [System.Windows.Forms.MessageBox]::Show("node.exe introuvable.", "Debit Bois") | Out-Null
+  [System.Windows.Forms.MessageBox]::Show(
+    "Electron n'est pas installe.`nDans VS Code : npm install",
+    "Debit Bois"
+  ) | Out-Null
   exit 1
 }
 
-$elec = Start-Process -FilePath $node.Source -ArgumentList "`"$electron`" ." `
+$elec = Start-Process -FilePath $electronExe -ArgumentList "." `
   -WorkingDirectory $Root `
-  -WindowStyle Hidden `
   -PassThru
 
 Wait-Process -Id $elec.Id -ErrorAction SilentlyContinue
