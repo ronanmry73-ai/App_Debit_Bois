@@ -4,7 +4,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const DEFAULT_DRIVE_BACKUP_DIR =
@@ -94,16 +94,13 @@ export function resolveBackupDir(json) {
   return DEFAULT_DRIVE_BACKUP_DIR;
 }
 
+/**
+ * Écriture directe. Drive Desktop refuse souvent rename(fichier.tmp → .json)
+ * et laisse le dossier vide.
+ */
 export async function atomicWriteFile(dest, content) {
   await mkdir(path.dirname(dest), { recursive: true });
-  const tmp = `${dest}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tmp, content, "utf8");
-  try {
-    await rename(tmp, dest);
-  } catch {
-    await rm(dest, { force: true });
-    await rename(tmp, dest);
-  }
+  await writeFile(dest, content, "utf8");
 }
 
 async function newestHistoryMs(historyDir) {
