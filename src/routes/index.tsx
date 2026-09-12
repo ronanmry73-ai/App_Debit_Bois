@@ -85,7 +85,9 @@ import {
   exportText,
   importText,
   loadPersisted,
+  migrateState,
   savePersisted,
+  type PersistedState,
   type ProjectMeta,
 } from "@/lib/persist";
 import type { AppSettings, PieceRow } from "@/lib/types";
@@ -93,6 +95,11 @@ import { effectivePurchasePrice, supplierCostFromCounts } from "@/lib/supplier";
 import { newId, cn } from "@/lib/utils";
 import { cuttingCsv, strategyDxf } from "@/lib/saw-export";
 import { pieceCanRotate } from "@/lib/piece-io";
+import {
+  desktopApi,
+  formatDriveStatusLabel,
+  type DriveBackupStatus,
+} from "@/lib/desktop";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -228,6 +235,8 @@ function Home() {
     strategyId: string;
     panel: PackedPanel;
   } | null>(null);
+  const [desktopApp, setDesktopApp] = useState(false);
+  const [driveStatus, setDriveStatus] = useState<DriveBackupStatus | null>(null);
 
   const liveFp = useMemo(
     () => fpOf({ rows, settings, selected, meta: projectMeta }),
@@ -255,63 +264,101 @@ function Home() {
     return [...ids];
   }, [usedRefIds, projects]);
 
+  function applyPersisted(saved: PersistedState, fromRestore = false) {
+    skipNextPack.current = true;
+    skipWastePrefill.current = true;
+    lastPlanId.current = "";
+    setResult(null);
+    setLastSwap(null);
+    setRows(saved.rows);
+    const named = saved.projects.find((p) => p.id === saved.currentProjectId);
+    const prefs = saved.workshopPrefs ?? emptyWorkshopPrefs();
+    let nextSettings: AppSettings = { ...DEFAULT_SETTINGS, ...saved.settings };
+    if (!named && isDemoCompany(nextSettings.companyName) && !prefs.companyName.trim()) {
+      nextSettings = {
+        ...nextSettings,
+        ...emptyQuoteIdentity(),
+        ...prefs,
+        clientName: saved.projectMeta.clientName || "",
+      };
+    }
+    setSettings(nextSettings);
+    const stockSynced = syncStockWithCatalog(saved.stock, saved.catalog);
+    setStock(stockSynced);
+    setMoves(saved.moves);
+    setCatalog(saved.catalog);
+    setProjects(saved.projects);
+    setProjectMeta(saved.projectMeta);
+    setUsedRefIds(saved.usedRefIds);
+    setSelected(saved.selectedStrategy || "mixed");
+    setWorkshopPrefs(prefs);
+    setStockDeduction(named?.stockDeduction ?? saved.stockDeduction ?? null);
+    setCalculatedAt(named?.calculatedAt ?? saved.calculatedAt ?? null);
+    setQuoteIssuedAt(named?.quoteIssuedAt ?? saved.quoteIssuedAt ?? null);
+    setCurrentProjectId(saved.currentProjectId || newId());
+    setSavedFp(
+      named
+        ? fpOf({
+            rows: named.rows,
+            settings: named.settings,
+            selected: named.selectedStrategy,
+            meta: {
+              name: named.name,
+              description: named.description,
+              notes: named.notes,
+              clientName: named.clientName,
+            },
+          })
+        : fpOf({
+            rows: saved.rows,
+            settings: nextSettings,
+            selected: saved.selectedStrategy || "mixed",
+            meta: saved.projectMeta,
+          }),
+    );
+    if (fromRestore) {
+      setFlash("État local remplacé par la sauvegarde Drive.");
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     void loadPersisted({ settings: DEFAULT_SETTINGS, emptyRow: INITIAL_EMPTY_ROW }).then(
       (saved) => {
         if (cancelled) return;
-        skipNextPack.current = true;
-        setRows(saved.rows);
-        const named = saved.projects.find((p) => p.id === saved.currentProjectId);
-        const prefs = saved.workshopPrefs ?? emptyWorkshopPrefs();
-        let nextSettings: AppSettings = { ...DEFAULT_SETTINGS, ...saved.settings };
-        if (!named && isDemoCompany(nextSettings.companyName) && !prefs.companyName.trim()) {
-          nextSettings = {
-            ...nextSettings,
-            ...emptyQuoteIdentity(),
-            ...prefs,
-            clientName: saved.projectMeta.clientName || "",
-          };
-        }
-        setSettings(nextSettings);
-        const stockSynced = syncStockWithCatalog(saved.stock, saved.catalog);
-        setStock(stockSynced);
-        setMoves(saved.moves);
-        setCatalog(saved.catalog);
-        setProjects(saved.projects);
-        setProjectMeta(saved.projectMeta);
-        setUsedRefIds(saved.usedRefIds);
-        setSelected(saved.selectedStrategy || "mixed");
-        setWorkshopPrefs(prefs);
-        setStockDeduction(named?.stockDeduction ?? saved.stockDeduction ?? null);
-        setCalculatedAt(named?.calculatedAt ?? saved.calculatedAt ?? null);
-        setQuoteIssuedAt(named?.quoteIssuedAt ?? saved.quoteIssuedAt ?? null);
-        setCurrentProjectId(saved.currentProjectId || newId());
-        setSavedFp(
-          named
-            ? fpOf({
-                rows: named.rows,
-                settings: named.settings,
-                selected: named.selectedStrategy,
-                meta: {
-                  name: named.name,
-                  description: named.description,
-                  notes: named.notes,
-                  clientName: named.clientName,
-                },
-              })
-            : fpOf({
-                rows: saved.rows,
-                settings: nextSettings,
-                selected: saved.selectedStrategy || "mixed",
-                meta: saved.projectMeta,
-              }),
-        );
+        applyPersisted(saved);
         setHydrated(true);
       },
     );
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const api = desktopApi();
+    if (!api) return;
+    setDesktopApp(true);
+    void api.getDriveStatus?.().then((s) => {
+      if (s) setDriveStatus(s);
+    });
+    const offStatus = api.onDriveStatus?.((s) => setDriveStatus(s));
+    const offRestored = api.onStoreRestored?.((json) => {
+      try {
+        const parsed = JSON.parse(json);
+        const saved = migrateState(parsed, {
+          settings: DEFAULT_SETTINGS,
+          emptyRow: INITIAL_EMPTY_ROW,
+        });
+        applyPersisted(saved, true);
+        void savePersisted(saved);
+      } catch {
+        setFlash("Sauvegarde Drive illisible.");
+      }
+    });
+    return () => {
+      offStatus?.();
+      offRestored?.();
     };
   }, []);
 
@@ -1491,6 +1538,22 @@ function Home() {
       >
         Unités en millimètres. Atelier, stock et devis. Catalogue à part. Le projet
         est un fichier : enregistrez pour le conserver.
+        {desktopApp && (
+          <>
+            {" · "}
+            <span>{formatDriveStatusLabel(driveStatus) || "Sauvegarde Drive : —"}</span>
+            {" · "}
+            <button
+              type="button"
+              className="underline-offset-2 hover:underline"
+              onClick={() => {
+                void desktopApi()?.restoreDriveBackup?.();
+              }}
+            >
+              Restaurer une sauvegarde Drive…
+            </button>
+          </>
+        )}
       </footer>
 
       <ConfirmDialog

@@ -5,6 +5,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  DEFAULT_DRIVE_BACKUP_DIR,
+  driveLocationAvailable,
+  lastKnownBackupDir,
+  mirrorToDrive,
+  resolveBackupDir,
+} from "./drive-backup.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -15,6 +22,10 @@ let child = null;
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
 let expectingChildExit = false;
+/** @type {{ ok: boolean, at: string | null, path?: string, error?: string | null } | null} */
+let lastDriveStatus = null;
+/** @type {Promise<unknown>} */
+let driveCopyChain = Promise.resolve();
 
 function isPortFree(port, host = "127.0.0.1") {
   return new Promise((resolve) => {
@@ -159,6 +170,13 @@ function buildMenu() {
           click: () => mainWindow?.webContents.print({ printBackground: true }),
         },
         { type: "separator" },
+        {
+          label: "Restaurer une sauvegarde Drive…",
+          click: () => {
+            void restoreDriveBackup();
+          },
+        },
+        { type: "separator" },
         isMac
           ? { role: "close", label: "Fermer" }
           : { role: "quit", label: "Quitter" },
@@ -238,6 +256,98 @@ function storePath() {
   return path.join(app.getPath("userData"), "debit-bois-store.json");
 }
 
+function probeDriveStatus(dir = lastKnownBackupDir()) {
+  if (lastDriveStatus) return lastDriveStatus;
+  if (!driveLocationAvailable(dir)) {
+    return {
+      ok: false,
+      at: null,
+      path: dir,
+      error: "Drive indisponible",
+    };
+  }
+  return { ok: true, at: null, path: dir, error: null };
+}
+
+function emitDriveStatus(event, status) {
+  lastDriveStatus = status;
+  try {
+    event?.sender?.send("debit-bois:drive-status", status);
+  } catch {
+    /* fenêtre fermée */
+  }
+  const win = BrowserWindow.getFocusedWindow() || mainWindow;
+  if (win && win.webContents !== event?.sender) {
+    try {
+      win.webContents.send("debit-bois:drive-status", status);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+async function copyStoreToDrive(json, event) {
+  const run = async () => {
+    const status = await mirrorToDrive(json);
+    emitDriveStatus(event, status);
+    return status;
+  };
+  const pending = driveCopyChain.then(run, run);
+  driveCopyChain = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  return pending;
+}
+
+async function restoreDriveBackup() {
+  const win = BrowserWindow.getFocusedWindow() || mainWindow;
+  const dir = lastKnownBackupDir() || DEFAULT_DRIVE_BACKUP_DIR;
+  const defaultPath = existsSync(dir) ? dir : undefined;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win ?? undefined, {
+    title: "Restaurer une sauvegarde Drive",
+    defaultPath,
+    properties: ["openFile"],
+    filters: [{ name: "Sauvegarde Débit Bois", extensions: ["json"] }],
+  });
+  if (canceled || !filePaths?.[0]) return { restored: false };
+  let raw;
+  try {
+    raw = await readFile(filePaths[0], "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("objet manquant");
+    }
+  } catch {
+    await dialog.showMessageBox(win ?? undefined, {
+      type: "error",
+      title: "Fichier invalide",
+      message: "Ce fichier n’est pas une sauvegarde Débit Bois lisible.",
+    });
+    return { restored: false };
+  }
+  const { response } = await dialog.showMessageBox(win ?? undefined, {
+    type: "warning",
+    buttons: ["Annuler", "Restaurer"],
+    defaultId: 0,
+    cancelId: 0,
+    title: "Restaurer une sauvegarde Drive",
+    message: "Remplacer l’état local par ce fichier ?",
+    detail:
+      "Catalogue, stocks et projets actuels seront remplacés. Ce n’est pas une fusion. Le fichier de travail (userData) sera écrasé.",
+  });
+  if (response !== 1) return { restored: false };
+  await mkdir(path.dirname(storePath()), { recursive: true });
+  await writeFile(storePath(), raw, "utf8");
+  const target = win ?? mainWindow;
+  try {
+    target?.webContents.send("debit-bois:store-restored", raw);
+  } catch {
+    /* ignore */
+  }
+  return { restored: true };
+}
+
 function registerStoreIpc() {
   ipcMain.handle("debit-bois:read-store", async () => {
     try {
@@ -247,11 +357,26 @@ function registerStoreIpc() {
     }
   });
 
-  ipcMain.handle("debit-bois:write-store", async (_event, json) => {
+  ipcMain.handle("debit-bois:write-store", async (event, json) => {
     if (typeof json !== "string") return false;
     await mkdir(path.dirname(storePath()), { recursive: true });
     await writeFile(storePath(), json, "utf8");
+    void copyStoreToDrive(json, event).catch((err) => {
+      console.warn("[Débit Bois] Copie Drive :", err);
+      emitDriveStatus(event, {
+        ok: false,
+        at: null,
+        path: resolveBackupDir(json),
+        error: "Drive indisponible",
+      });
+    });
     return true;
+  });
+
+  ipcMain.handle("debit-bois:get-drive-status", () => probeDriveStatus());
+
+  ipcMain.handle("debit-bois:restore-drive-backup", async () => {
+    return restoreDriveBackup();
   });
 
   ipcMain.handle("debit-bois:export-file", async (_event, suggestedName, content) => {

@@ -1,3 +1,10 @@
+export type DriveBackupStatus = {
+  ok: boolean;
+  at: string | null;
+  path?: string;
+  error?: string | null;
+};
+
 export type DebitBoisDesktop = {
   isDesktop: boolean;
   platform?: string;
@@ -6,6 +13,10 @@ export type DebitBoisDesktop = {
   exportFile: (suggestedName: string, content: string) => Promise<boolean>;
   importFile: () => Promise<string | null>;
   setTitle?: (title: string) => Promise<boolean>;
+  getDriveStatus?: () => Promise<DriveBackupStatus | null>;
+  restoreDriveBackup?: () => Promise<{ restored: boolean }>;
+  onDriveStatus?: (cb: (status: DriveBackupStatus) => void) => () => void;
+  onStoreRestored?: (cb: (json: string) => void) => () => void;
 };
 
 export function desktopApi(): DebitBoisDesktop | null {
@@ -14,4 +25,18 @@ export function desktopApi(): DebitBoisDesktop | null {
     .debitBoisDesktop;
   if (!api?.isDesktop) return null;
   return api;
+}
+
+export function formatDriveStatusLabel(status: DriveBackupStatus | null): string {
+  if (!status) return "";
+  if (status.ok && status.at) {
+    const d = new Date(status.at);
+    if (!Number.isNaN(d.getTime())) {
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `Sauvegarde Drive : ${p(d.getDate())}/${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+    return "Sauvegarde Drive : OK";
+  }
+  if (status.ok) return "Sauvegarde Drive : prête";
+  return "Drive indisponible — données locales OK";
 }

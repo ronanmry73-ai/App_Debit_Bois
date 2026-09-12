@@ -57,3 +57,14 @@ test("projet neuf reprend les préférences, jamais le client démo", () => {
   assert.equal(s.hourlyRate, 50);
   assert.equal(s.pricePerM2, null);
 });
+
+test("chemin Drive : vide par défaut, conservé à la migration", () => {
+  assert.equal(emptyWorkshopPrefs().driveBackupPath, "");
+  const prefs = migrateWorkshopPrefs(
+    { companyName: "Atelier", driveBackupPath: "  D:/Sauve/Debit  " },
+    demoSettings(),
+  );
+  assert.equal(prefs.driveBackupPath, "D:/Sauve/Debit");
+  const empty = migrateWorkshopPrefs({ companyName: "Atelier" }, demoSettings());
+  assert.equal(empty.driveBackupPath, "");
+});

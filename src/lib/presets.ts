@@ -126,6 +126,8 @@ export type WorkshopPrefs = {
   validity: string;
   payment: string;
   legal: string;
+  /** Dossier miroir Drive Desktop. Vide = défaut Electron (H:\\Mon Drive\\…). */
+  driveBackupPath?: string;
 };
 
 export function emptyWorkshopPrefs(): WorkshopPrefs {
@@ -141,6 +143,7 @@ export function emptyWorkshopPrefs(): WorkshopPrefs {
     validity: "",
     payment: "",
     legal: "",
+    driveBackupPath: "",
   };
 }
 
@@ -190,6 +193,8 @@ export function migrateWorkshopPrefs(
       ...emptyWorkshopPrefs(),
       ...o,
       companyName: typeof o.companyName === "string" ? o.companyName : "",
+      driveBackupPath:
+        typeof o.driveBackupPath === "string" ? o.driveBackupPath.trim() : "",
     };
   }
   if (settings.companyName && !isDemoCompany(settings.companyName)) {
