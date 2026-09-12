@@ -17,14 +17,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const DEV_URL = process.env.DEBIT_BOIS_URL || "http://127.0.0.1:8080";
 
-/** @type {import('node:child_process').ChildProcess | null} */
 let child = null;
-/** @type {BrowserWindow | null} */
 let mainWindow = null;
 let expectingChildExit = false;
-/** @type {{ ok: boolean, at: string | null, path?: string, error?: string | null } | null} */
 let lastDriveStatus = null;
-/** @type {Promise<unknown>} */
 let driveCopyChain = Promise.resolve();
 
 function isPortFree(port, host = "127.0.0.1") {
@@ -48,9 +44,7 @@ function waitForHttp(url, timeoutMs = 120_000) {
           resolve(undefined);
           return;
         }
-      } catch {
-        /* server not up yet */
-      }
+      } catch {}
       if (Date.now() - started > timeoutMs) {
         reject(new Error(`Timeout: ${url} ne répond pas.`));
         return;
@@ -64,18 +58,13 @@ function waitForHttp(url, timeoutMs = 120_000) {
 function findNode() {
   const fromNpm = process.env.npm_node_execpath;
   if (fromNpm && existsSync(fromNpm)) return fromNpm;
-
   const home = process.env.USERPROFILE || process.env.HOME || "";
   const candidates = [
     process.env.NODE_EXE,
     "C:\\Program Files\\nodejs\\node.exe",
-    "C:\\Program Files (x86)\\nodejs\\node.exe",
     path.join(home, "AppData\\Local\\Programs\\nodejs\\node.exe"),
-    "/usr/local/bin/node",
-    "/usr/bin/node",
     "node",
   ].filter(Boolean);
-
   for (const candidate of candidates) {
     if (candidate === "node" || existsSync(candidate)) return candidate;
   }
@@ -85,8 +74,7 @@ function findNode() {
 function withNodeOnPath(env) {
   const nodeDir = path.dirname(findNode());
   const bin = path.join(ROOT, "node_modules", ".bin");
-  const key = process.platform === "win32" ? "Path" : "PATH";
-  const current = env[key] || env.PATH || "";
+  const current = env.Path || env.PATH || "";
   const sep = process.platform === "win32" ? ";" : ":";
   return { ...env, PATH: `${bin}${sep}${nodeDir}${sep}${current}`, Path: `${bin}${sep}${nodeDir}${sep}${current}` };
 }
@@ -95,48 +83,29 @@ function startDevServer() {
   const node = findNode();
   const wrapper = path.join(ROOT, "scripts", "with-app-env.mjs");
   const viteJs = path.join(ROOT, "node_modules", "vite", "bin", "vite.js");
-
   if (!existsSync(path.join(ROOT, "node_modules", "vite"))) {
-    throw new Error(
-      "Les dépendances ne sont pas installées.\nDans le terminal VS Code, lance :\n\nnpm install",
-    );
+    throw new Error("Lance npm install dans VS Code.");
   }
-  if (!existsSync(wrapper)) {
-    throw new Error("Fichier manquant : scripts/with-app-env.mjs");
-  }
-
   const args = existsSync(viteJs)
     ? [wrapper, node, viteJs, "dev", "--host", "127.0.0.1", "--port", "8080"]
     : [wrapper, "vite", "dev", "--host", "127.0.0.1", "--port", "8080"];
-
   const proc = spawn(node, args, {
     cwd: ROOT,
     env: withNodeOnPath(process.env),
     stdio: "inherit",
     windowsHide: true,
   });
-
   proc.on("exit", (code) => {
     if (expectingChildExit || app.isQuiting) return;
     if (code && code !== 0) {
-      dialog.showErrorBox(
-        "Débit Bois",
-        `Le serveur interne s'est arrêté (code ${code}).\n\n` +
-          "Ouvre un terminal dans VS Code et lance :\n\n" +
-          "  npm run dev\n\n" +
-          "Attends le message localhost:8080, puis dans un 2e terminal :\n\n" +
-          "  npm run desktop:win",
-      );
+      dialog.showErrorBox("Débit Bois", `Le serveur interne s'est arrêté (code ${code}).`);
     }
   });
-
   return proc;
 }
 
 async function ensureServer() {
-  if (!(await isPortFree(8080))) {
-    return DEV_URL;
-  }
+  if (!(await isPortFree(8080))) return DEV_URL;
   child = startDevServer();
   await waitForHttp(DEV_URL);
   return DEV_URL;
@@ -145,22 +114,7 @@ async function ensureServer() {
 function buildMenu() {
   const isMac = process.platform === "darwin";
   const template = [
-    ...(isMac
-      ? [
-          {
-            label: app.name,
-            submenu: [
-              { role: "about", label: "À propos de Débit Bois" },
-              { type: "separator" },
-              { role: "hide", label: "Masquer" },
-              { role: "hideOthers", label: "Masquer les autres" },
-              { role: "unhide", label: "Tout afficher" },
-              { type: "separator" },
-              { role: "quit", label: "Quitter" },
-            ],
-          },
-        ]
-      : []),
+    ...(isMac ? [{ label: app.name, submenu: [{ role: "about" }, { role: "quit", label: "Quitter" }] }] : []),
     {
       label: "Fichier",
       submenu: [
@@ -170,16 +124,9 @@ function buildMenu() {
           click: () => mainWindow?.webContents.print({ printBackground: true }),
         },
         { type: "separator" },
-        {
-          label: "Restaurer une sauvegarde Drive…",
-          click: () => {
-            void restoreDriveBackup();
-          },
-        },
+        { label: "Restaurer une sauvegarde Drive…", click: () => { void restoreDriveBackup(); } },
         { type: "separator" },
-        isMac
-          ? { role: "close", label: "Fermer" }
-          : { role: "quit", label: "Quitter" },
+        isMac ? { role: "close", label: "Fermer" } : { role: "quit", label: "Quitter" },
       ],
     },
     {
@@ -198,24 +145,9 @@ function buildMenu() {
       label: "Affichage",
       submenu: [
         { role: "reload", label: "Recharger" },
-        { role: "forceReload", label: "Forcer le rechargement" },
         { role: "toggleDevTools", label: "Outils de développement" },
         { type: "separator" },
-        { role: "resetZoom", label: "Zoom réel" },
-        { role: "zoomIn", label: "Zoom avant" },
-        { role: "zoomOut", label: "Zoom arrière" },
-        { type: "separator" },
         { role: "togglefullscreen", label: "Plein écran" },
-      ],
-    },
-    {
-      label: "Aide",
-      submenu: [
-        {
-          label: "Dépôt GitHub",
-          click: () =>
-            shell.openExternal("https://github.com/ronanmry73-ai/App_Debit_Bois"),
-        },
       ],
     },
   ];
@@ -230,20 +162,18 @@ async function createWindow(url) {
     minHeight: 700,
     title: "Débit Bois",
     backgroundColor: "#f4f1ea",
-    autoHideMenuBar: process.platform === "win32",
+    autoHideMenuBar: false,
     webPreferences: {
-      preload: path.join(__dirname, "preload.mjs"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
     },
   });
-
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
     shell.openExternal(target);
     return { action: "deny" };
   });
-
   await mainWindow.loadURL(url);
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -259,30 +189,17 @@ function storePath() {
 function probeDriveStatus(dir = lastKnownBackupDir()) {
   if (lastDriveStatus) return lastDriveStatus;
   if (!driveLocationAvailable(dir)) {
-    return {
-      ok: false,
-      at: null,
-      path: dir,
-      error: "Drive indisponible",
-    };
+    return { ok: false, at: null, path: dir, error: "Drive indisponible" };
   }
   return { ok: true, at: null, path: dir, error: null };
 }
 
 function emitDriveStatus(event, status) {
   lastDriveStatus = status;
-  try {
-    event?.sender?.send("debit-bois:drive-status", status);
-  } catch {
-    /* fenêtre fermée */
-  }
+  try { event?.sender?.send("debit-bois:drive-status", status); } catch {}
   const win = BrowserWindow.getFocusedWindow() || mainWindow;
   if (win && win.webContents !== event?.sender) {
-    try {
-      win.webContents.send("debit-bois:drive-status", status);
-    } catch {
-      /* ignore */
-    }
+    try { win.webContents.send("debit-bois:drive-status", status); } catch {}
   }
 }
 
@@ -293,10 +210,7 @@ async function copyStoreToDrive(json, event) {
     return status;
   };
   const pending = driveCopyChain.then(run, run);
-  driveCopyChain = pending.then(
-    () => undefined,
-    () => undefined,
-  );
+  driveCopyChain = pending.then(() => undefined, () => undefined);
   return pending;
 }
 
@@ -314,10 +228,7 @@ async function restoreDriveBackup() {
   let raw;
   try {
     raw = await readFile(filePaths[0], "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") {
-      throw new Error("objet manquant");
-    }
+    JSON.parse(raw);
   } catch {
     await dialog.showMessageBox(win ?? undefined, {
       type: "error",
@@ -333,58 +244,33 @@ async function restoreDriveBackup() {
     cancelId: 0,
     title: "Restaurer une sauvegarde Drive",
     message: "Remplacer l’état local par ce fichier ?",
-    detail:
-      "Catalogue, stocks et projets actuels seront remplacés. Ce n’est pas une fusion. Le fichier de travail (userData) sera écrasé.",
   });
   if (response !== 1) return { restored: false };
   await mkdir(path.dirname(storePath()), { recursive: true });
   await writeFile(storePath(), raw, "utf8");
-  const target = win ?? mainWindow;
-  try {
-    target?.webContents.send("debit-bois:store-restored", raw);
-  } catch {
-    /* ignore */
-  }
+  try { (win ?? mainWindow)?.webContents.send("debit-bois:store-restored", raw); } catch {}
   return { restored: true };
 }
 
 function registerStoreIpc() {
   ipcMain.handle("debit-bois:read-store", async () => {
-    try {
-      return await readFile(storePath(), "utf8");
-    } catch {
-      return null;
-    }
+    try { return await readFile(storePath(), "utf8"); } catch { return null; }
   });
-
   ipcMain.handle("debit-bois:write-store", async (event, json) => {
     if (typeof json !== "string") return false;
     await mkdir(path.dirname(storePath()), { recursive: true });
     await writeFile(storePath(), json, "utf8");
     void copyStoreToDrive(json, event).catch((err) => {
       console.warn("[Débit Bois] Copie Drive :", err);
-      emitDriveStatus(event, {
-        ok: false,
-        at: null,
-        path: resolveBackupDir(json),
-        error: "Drive indisponible",
-      });
+      emitDriveStatus(event, { ok: false, at: null, path: resolveBackupDir(json), error: "Drive indisponible" });
     });
     return true;
   });
-
   ipcMain.handle("debit-bois:get-drive-status", () => probeDriveStatus());
-
-  ipcMain.handle("debit-bois:restore-drive-backup", async () => {
-    return restoreDriveBackup();
-  });
-
+  ipcMain.handle("debit-bois:restore-drive-backup", async () => restoreDriveBackup());
   ipcMain.handle("debit-bois:export-file", async (_event, suggestedName, content) => {
     const win = BrowserWindow.getFocusedWindow() || mainWindow;
-    const defaultName =
-      typeof suggestedName === "string" && suggestedName.trim()
-        ? suggestedName.trim()
-        : "projet-debit-bois.json";
+    const defaultName = typeof suggestedName === "string" && suggestedName.trim() ? suggestedName.trim() : "projet-debit-bois.json";
     const { canceled, filePath } = await dialog.showSaveDialog(win ?? undefined, {
       title: "Exporter le projet",
       defaultPath: defaultName.endsWith(".json") ? defaultName : `${defaultName}.json`,
@@ -394,7 +280,6 @@ function registerStoreIpc() {
     await writeFile(filePath, String(content ?? ""), "utf8");
     return true;
   });
-
   ipcMain.handle("debit-bois:import-file", async () => {
     const win = BrowserWindow.getFocusedWindow() || mainWindow;
     const { canceled, filePaths } = await dialog.showOpenDialog(win ?? undefined, {
@@ -403,18 +288,11 @@ function registerStoreIpc() {
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
     if (canceled || !filePaths?.[0]) return null;
-    try {
-      return await readFile(filePaths[0], "utf8");
-    } catch {
-      return null;
-    }
+    try { return await readFile(filePaths[0], "utf8"); } catch { return null; }
   });
-
   ipcMain.handle("debit-bois:set-title", (_event, title) => {
-    const t =
-      typeof title === "string" && title.trim() ? title.trim() : "Débit Bois";
-    const win = BrowserWindow.getFocusedWindow() || mainWindow;
-    win?.setTitle(t);
+    const t = typeof title === "string" && title.trim() ? title.trim() : "Débit Bois";
+    (BrowserWindow.getFocusedWindow() || mainWindow)?.setTitle(t);
     return true;
   });
 }
@@ -423,26 +301,15 @@ app.whenReady().then(async () => {
   registerStoreIpc();
   buildMenu();
   try {
-    const url = process.env.DEBIT_BOIS_URL
-      ? process.env.DEBIT_BOIS_URL
-      : await ensureServer();
+    const url = process.env.DEBIT_BOIS_URL ? process.env.DEBIT_BOIS_URL : await ensureServer();
     await createWindow(url);
   } catch (err) {
-    dialog.showErrorBox(
-      "Débit Bois — démarrage impossible",
-      `${err instanceof Error ? err.message : String(err)}\n\n` +
-        "Dans le terminal VS Code :\n\n" +
-        "  git pull\n  npm install\n  npm run dev\n\n" +
-        "Quand tu vois http://localhost:8080, ouvre un 2e terminal :\n\n" +
-        "  npm run desktop:win",
-    );
+    dialog.showErrorBox("Débit Bois — démarrage impossible", err instanceof Error ? err.message : String(err));
     app.quit();
   }
-
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      const url = process.env.DEBIT_BOIS_URL || DEV_URL;
-      await createWindow(url);
+      await createWindow(process.env.DEBIT_BOIS_URL || DEV_URL);
     }
   });
 });
