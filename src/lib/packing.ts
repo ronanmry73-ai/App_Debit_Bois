@@ -22,6 +22,8 @@ export type { PanelSpec };
 
 export type PanelFormat = string;
 
+export type OccupiedRect = { x: number; y: number; w: number; h: number };
+
 export const DEFAULT_SPECS: PanelSpec[] = [
   {
     id: "A",
@@ -62,6 +64,8 @@ export type PieceDef = {
   familyId?: string | null;
   familyName?: string | null;
   allowedSpecIds?: string[] | null;
+  /** Rotation déjà résolue pour cette pièce. Absent = options.allowRotation. */
+  canRotate?: boolean;
 };
 
 export type Item = {
@@ -71,6 +75,8 @@ export type Item = {
   w: number;
   h: number;
   allowedSpecIds?: string[] | null;
+  canRotate?: boolean;
+  familyId?: string | null;
 };
 
 export type Placement = {
@@ -82,6 +88,10 @@ export type Placement = {
   w: number;
   h: number;
   rotated: boolean;
+  /** Ordre de pose (guillotine = ordre de coupe). */
+  cutIndex?: number;
+  /** n° affiché, ex. 1.3 */
+  code?: string;
 };
 
 export type PackedPanel = {
@@ -96,6 +106,20 @@ export type PackedPanel = {
   wasteArea: number;
   wastePercent: number;
   method: "maxrects" | "guillotine";
+  source?: "sheet" | "offcut";
+  stockItemId?: string;
+  familyId?: string;
+  familyName?: string;
+  /** Chutes verrouillées (ne plus y placer de pièce). */
+  lockedRects?: OccupiedRect[];
+};
+
+export type OffcutUsage = {
+  stockItemId: string;
+  name: string;
+  length: number;
+  width: number;
+  qty: number;
 };
 
 export type StrategyResult = {
@@ -108,6 +132,7 @@ export type StrategyResult = {
   wastePercent: number;
   unplaced: Item[];
   method: "maxrects" | "guillotine" | "mixte";
+  offcutsUsed?: OffcutUsage[];
 };
 
 export type PackWarning = {
@@ -117,11 +142,25 @@ export type PackWarning = {
   message: string;
 };
 
+export type OffcutBin = {
+  id: string;
+  length: number;
+  width: number;
+  familyId?: string | null;
+  familyName?: string | null;
+  name: string;
+  qty?: number;
+};
+
 export type OptimizeOptions = {
   kerf: number;
   allowRotation: boolean;
   method: PackMethod;
   specs?: PanelSpec[];
+  /** Chutes stock à essayer AVANT les feuilles neuves. */
+  offcuts?: OffcutBin[];
+  /** Zones déjà occupées (verrouillage de chute), mm. */
+  occupied?: OccupiedRect[];
 };
 
 export type OptimizeOutput = {
@@ -146,6 +185,107 @@ function specOf(specs: PanelSpec[], id: string): PanelSpec {
   return specs.find((s) => s.id === id) ?? specs[0]!;
 }
 
+export const OFFCUT_MIN_SIDE_MM = 300;
+export const OFFCUT_MIN_AREA_MM2 = 50_000;
+
+export function isStockableOffcut(w: number, h: number): boolean {
+  if (!(w > 0 && h > 0)) return false;
+  return Math.min(w, h) >= OFFCUT_MIN_SIDE_MM || w * h >= OFFCUT_MIN_AREA_MM2;
+}
+
+export type FreeRect = { x: number; y: number; w: number; h: number };
+
+/** Rectangles restants après pose, en mm sur le bac. */
+export function leftoverRects(panel: PackedPanel, kerf: number): FreeRect[] {
+  const k = Math.max(0, kerf);
+  let free: Rect[] = [
+    { x: 0, y: 0, w: panel.length + k, h: panel.width + k },
+  ];
+  for (const p of panel.placements) {
+    free = splitMaxRects(free, {
+      x: p.x,
+      y: p.y,
+      w: p.w + k,
+      h: p.h + k,
+    });
+  }
+  const out: FreeRect[] = [];
+  for (const r of free) {
+    const x = Math.max(0, r.x);
+    const y = Math.max(0, r.y);
+    const w = Math.min(r.x + r.w, panel.length) - x;
+    const h = Math.min(r.y + r.h, panel.width) - y;
+    if (w >= 1 && h >= 1) {
+      out.push({ x, y, w: Math.round(w), h: Math.round(h) });
+    }
+  }
+  return out;
+}
+
+function rectsOverlap(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+): boolean {
+  return (
+    a.x < b.x + b.w - EPS &&
+    a.x + a.w > b.x + EPS &&
+    a.y < b.y + b.h - EPS &&
+    a.y + a.h > b.y + EPS
+  );
+}
+
+/** Chutes disjointes assez grandes pour le stock (plus grand d’abord). */
+export function stockableLeftovers(panel: PackedPanel, kerf: number): FreeRect[] {
+  const locked = panel.lockedRects ?? [];
+  const free = leftoverRects(panel, kerf)
+    .filter((r) => isStockableOffcut(r.w, r.h))
+    .filter((r) => !locked.some((o) => rectsOverlap(r, o)))
+    .sort((a, b) => b.w * b.h - a.w * a.h);
+  const picked: FreeRect[] = [];
+  for (const r of free) {
+    if (!picked.some((p) => rectsOverlap(r, p))) picked.push(r);
+  }
+  return picked;
+}
+
+function offcutToSpec(oc: OffcutBin): PanelSpec {
+  return {
+    id: `offcut:${oc.id}`,
+    length: oc.length,
+    width: oc.width,
+    label: oc.name || `Chute ${oc.length} × ${oc.width} mm`,
+    familyId: oc.familyId || "",
+    familyName: oc.familyName || "",
+    kind: "offcut",
+    stockItemId: oc.id,
+  };
+}
+
+function packOffcutsFirst(
+  items: Item[],
+  offcuts: OffcutBin[],
+  options: OptimizeOptions,
+): { panels: PackedPanel[]; remaining: Item[] } {
+  const panels: PackedPanel[] = [];
+  let remaining = items.slice();
+  const bins = offcuts
+    .filter((o) => o.length > 0 && o.width > 0 && (o.qty ?? 1) > 0)
+    .slice()
+    .sort((a, b) => b.length * b.width - a.length * a.width);
+  for (const oc of bins) {
+    const copies = Math.max(1, Math.floor(oc.qty ?? 1));
+    const spec = offcutToSpec(oc);
+    for (let n = 0; n < copies; n++) {
+      if (remaining.length === 0) break;
+      const attempt = packOneBinBest(spec, remaining, options);
+      if (attempt.placements.length === 0) break;
+      panels.push(toPackedPanel(spec, panels.length + 1, attempt));
+      remaining = attempt.remaining;
+    }
+  }
+  return { panels, remaining };
+}
+
 function panelArea(spec: PanelSpec): number {
   return spec.length * spec.width;
 }
@@ -162,6 +302,8 @@ export function explodePieces(defs: PieceDef[]): Item[] {
         w: def.length,
         h: def.width,
         allowedSpecIds: def.allowedSpecIds,
+        canRotate: def.canRotate,
+        familyId: def.familyId,
       });
     }
   }
@@ -325,6 +467,10 @@ function betterScore(a: Candidate, b: Candidate): boolean {
   return a.scoreB < b.scoreB;
 }
 
+function itemRotates(item: Item, allowRotation: boolean): boolean {
+  return item.canRotate ?? allowRotation;
+}
+
 function collectCandidates(
   freeRects: Rect[],
   item: Item,
@@ -336,7 +482,7 @@ function collectCandidates(
   const orientations: { w: number; h: number; rotated: boolean }[] = [
     { w: item.w, h: item.h, rotated: false },
   ];
-  if (allowRotation && item.w !== item.h) {
+  if (itemRotates(item, allowRotation) && item.w !== item.h) {
     orientations.push({ w: item.h, h: item.w, rotated: true });
   }
   for (const ori of orientations) {
@@ -385,10 +531,19 @@ function packOneBin(
   algo: Algo,
   heuristic: Heuristic,
   sortKey: SortKey,
+  occupied: OccupiedRect[] = [],
 ): BinAttempt {
   const binW = spec.length + kerf;
   const binH = spec.width + kerf;
   let free: Rect[] = [{ x: 0, y: 0, w: binW, h: binH }];
+  for (const occ of occupied) {
+    free = splitMaxRects(free, {
+      x: occ.x,
+      y: occ.y,
+      w: occ.w + kerf,
+      h: occ.h + kerf,
+    });
+  }
   const ordered = sortItems(items, sortKey);
   const placements: Placement[] = [];
   const leftover: Item[] = [];
@@ -413,6 +568,7 @@ function packOneBin(
       w: best.w,
       h: best.h,
       rotated: best.rotated,
+      cutIndex: placements.length + 1,
     });
     const used: Rect = { x: best.x, y: best.y, w: best.iw, h: best.ih };
     if (algo === "maxrects") {
@@ -479,6 +635,7 @@ function packOneBinBest(
   items: Item[],
   options: OptimizeOptions,
 ): BinAttempt {
+  const occupied = options.occupied ?? [];
   const algos = algosFor(options.method);
   const heuristics: Heuristic[] =
     options.method === "guillotine" ? ["bssf"] : ["bssf", "baf", "bl"];
@@ -496,6 +653,7 @@ function packOneBinBest(
           algo,
           heuristic,
           sortKey,
+          occupied,
         );
         if (betterBin(attempt, best)) best = attempt;
       }
@@ -529,6 +687,10 @@ function toPackedPanel(
     wasteArea,
     wastePercent: total > 0 ? (wasteArea / total) * 100 : 0,
     method: attempt.method,
+    source: spec.kind === "offcut" ? "offcut" : "sheet",
+    stockItemId: spec.stockItemId,
+    familyId: spec.familyId,
+    familyName: spec.familyName,
   };
 }
 
@@ -564,6 +726,44 @@ function emptyCounts(specs: PanelSpec[]): Record<string, number> {
   return counts;
 }
 
+function isOffcutPanel(p: PackedPanel): boolean {
+  return p.source === "offcut" || p.format.startsWith("offcut:");
+}
+
+function offcutUsageOf(panels: PackedPanel[]): OffcutUsage[] {
+  const map = new Map<string, OffcutUsage>();
+  for (const p of panels) {
+    if (!isOffcutPanel(p) || !p.stockItemId) continue;
+    const cur = map.get(p.stockItemId);
+    if (cur) {
+      cur.qty += 1;
+    } else {
+      map.set(p.stockItemId, {
+        stockItemId: p.stockItemId,
+        name: p.label,
+        length: p.length,
+        width: p.width,
+        qty: 1,
+      });
+    }
+  }
+  return [...map.values()];
+}
+
+function tagPanelPlacements(panels: PackedPanel[]): PackedPanel[] {
+  return panels.map((p, i) => ({
+    ...p,
+    index: i + 1,
+    id: isOffcutPanel(p)
+      ? `offcut-${p.stockItemId ?? p.format}-${i + 1}`
+      : `${p.format}-${i + 1}`,
+    placements: p.placements.map((pl, j) => ({
+      ...pl,
+      code: `${i + 1}.${j + 1}`,
+    })),
+  }));
+}
+
 function finishStrategy(
   id: StrategyId,
   label: string,
@@ -571,30 +771,33 @@ function finishStrategy(
   unplaced: Item[],
   specs: PanelSpec[],
 ): StrategyResult {
+  const tagged = tagPanelPlacements(panels);
+  const sheets = tagged.filter((p) => !isOffcutPanel(p));
   const counts = emptyCounts(specs);
-  for (const p of panels) {
+  for (const p of sheets) {
     counts[p.format] = (counts[p.format] ?? 0) + 1;
   }
-  const purchasedArea = panels.reduce(
-    (s, p) => s + p.length * p.width,
-    0,
-  );
-  const usedArea = panels.reduce((s, p) => s + p.usedArea, 0);
+  const purchasedArea = sheets.reduce((s, p) => s + p.length * p.width, 0);
+  const usedArea = tagged.reduce((s, p) => s + p.usedArea, 0);
+  const usedOnSheets = sheets.reduce((s, p) => s + p.usedArea, 0);
   const wastePercent =
-    purchasedArea > 0 ? ((purchasedArea - usedArea) / purchasedArea) * 100 : 0;
-  const methods = new Set(panels.map((p) => p.method));
+    purchasedArea > 0
+      ? ((purchasedArea - usedOnSheets) / purchasedArea) * 100
+      : 0;
+  const methods = new Set(tagged.map((p) => p.method));
   const method: StrategyResult["method"] =
     methods.size === 1 ? [...methods][0]! : "mixte";
   return {
     id,
     label,
-    panels,
+    panels: tagged,
     counts,
     purchasedArea,
     usedArea,
     wastePercent,
     unplaced,
     method,
+    offcutsUsed: offcutUsageOf(tagged),
   };
 }
 
@@ -624,19 +827,14 @@ function onlyFitsSpec(
   options: OptimizeOptions,
 ): boolean {
   if (!itemAllowedOn(item, spec.id)) return false;
-  if (!pieceFitsSpec(item.w, item.h, spec, options.allowRotation, options.kerf)) {
+  const rot = itemRotates(item, options.allowRotation);
+  if (!pieceFitsSpec(item.w, item.h, spec, rot, options.kerf)) {
     return false;
   }
   return specs.every((other) => {
     if (other.id === spec.id) return true;
     if (!itemAllowedOn(item, other.id)) return true;
-    return !pieceFitsSpec(
-      item.w,
-      item.h,
-      other,
-      options.allowRotation,
-      options.kerf,
-    );
+    return !pieceFitsSpec(item.w, item.h, other, rot, options.kerf);
   });
 }
 
@@ -791,52 +989,93 @@ export function optimizeCutting(
   const specs = resolveSpecs(options);
   const opts: OptimizeOptions = { ...options, kerf, specs };
   const warnings: PackWarning[] = [];
+  const offcutSpecs = (options.offcuts ?? [])
+    .filter((o) => o.length > 0 && o.width > 0 && (o.qty ?? 1) > 0)
+    .map(offcutToSpec);
 
   const prepared: PieceDef[] = defs
     .filter((d) => d.length > 0 && d.width > 0 && d.qty > 0)
     .map((d) => {
+      const rot = d.canRotate ?? opts.allowRotation;
+      const matchingOffcuts = offcutSpecs.filter((s) => {
+        if (d.familyId && s.familyId && d.familyId !== s.familyId) return false;
+        return pieceFitsSpec(d.length, d.width, s, rot, kerf);
+      });
       if (d.allowedSpecIds && d.allowedSpecIds.length > 0) {
         const ok = d.allowedSpecIds.filter((id) => specs.some((s) => s.id === id));
-        if (ok.length === 0) {
+        if (ok.length === 0 && matchingOffcuts.length === 0) {
           const fam =
             d.familyName ||
             specs.find((s) => s.familyId === d.familyId)?.familyName ||
             "sélectionnée";
           warnings.push(familyWarning(d, fam));
         }
-        return { ...d, allowedSpecIds: ok.length > 0 ? ok : [] };
+        return {
+          ...d,
+          allowedSpecIds: [...ok, ...matchingOffcuts.map((s) => s.id)],
+        };
       }
       if (d.familyId) {
         const famSpecs = specs.filter((s) => s.familyId === d.familyId);
         const compatible = famSpecs.filter((s) =>
-          pieceFitsSpec(d.length, d.width, s, opts.allowRotation, kerf),
+          pieceFitsSpec(d.length, d.width, s, rot, kerf),
         );
-        if (compatible.length === 0) {
+        if (compatible.length === 0 && matchingOffcuts.length === 0) {
           const fam = d.familyName || famSpecs[0]?.familyName || "sélectionnée";
           warnings.push(familyWarning(d, fam));
           return { ...d, allowedSpecIds: [] };
         }
-        return { ...d, allowedSpecIds: compatible.map((s) => s.id) };
+        return {
+          ...d,
+          allowedSpecIds: [
+            ...compatible.map((s) => s.id),
+            ...matchingOffcuts.map((s) => s.id),
+          ],
+        };
+      }
+      if (matchingOffcuts.length > 0) {
+        return {
+          ...d,
+          allowedSpecIds: [
+            ...specs.map((s) => s.id),
+            ...matchingOffcuts.map((s) => s.id),
+          ],
+        };
       }
       return { ...d, allowedSpecIds: null };
     });
 
   const items = explodePieces(prepared);
 
+  const offcutBins = (options.offcuts ?? []).filter(
+    (o) => o.length > 0 && o.width > 0 && (o.qty ?? 1) > 0,
+  );
+  const { panels: offcutPanels, remaining } = packOffcutsFirst(
+    items,
+    offcutBins,
+    opts,
+  );
+
   const allStrategies: StrategyResult[] = specs.map((spec) => {
-    const packed = packAllBins(spec, items, opts);
+    const packed = packAllBins(spec, remaining, opts);
     return finishStrategy(
       `all-${spec.id}`,
       `Tout en ${spec.label}`,
-      packed.panels,
+      offcutPanels.concat(packed.panels),
       packed.unplaced,
       specs,
     );
   });
 
-  const mixed = packMixedBest(items, opts, specs);
+  const mixed = packMixedBest(remaining, opts, specs);
   allStrategies.push(
-    finishStrategy("mixed", "Mixte", mixed.panels, mixed.unplaced, specs),
+    finishStrategy(
+      "mixed",
+      "Mixte",
+      offcutPanels.concat(mixed.panels),
+      mixed.unplaced,
+      specs,
+    ),
   );
 
   let best = allStrategies[0]!;
@@ -875,3 +1114,138 @@ export function assertValidLayout(panel: PackedPanel, kerf: number): string[] {
   }
   return errors;
 }
+
+export function canSwapOnPanel(
+  a: Placement,
+  b: Placement,
+): { ok: true } | { ok: false; reason: string } {
+  const aFitsB = a.w <= b.w + EPS && a.h <= b.h + EPS;
+  const bFitsA = b.w <= a.w + EPS && b.h <= a.h + EPS;
+  if (aFitsB && bFitsA) return { ok: true };
+  return {
+    ok: false,
+    reason: `${a.name} (${Math.round(a.w)}×${Math.round(a.h)}) et ${b.name} (${Math.round(b.w)}×${Math.round(b.h)}) : les rectangles ne se contiennent pas.`,
+  };
+}
+
+export function swapOnPanel(
+  panel: PackedPanel,
+  instanceA: string,
+  instanceB: string,
+): { ok: true; panel: PackedPanel } | { ok: false; reason: string } {
+  const a = panel.placements.find((p) => p.instanceId === instanceA);
+  const b = panel.placements.find((p) => p.instanceId === instanceB);
+  if (!a || !b) {
+    return { ok: false, reason: "Pièces introuvables sur ce panneau." };
+  }
+  if (a.instanceId === b.instanceId) {
+    return { ok: false, reason: "Choisissez deux pièces distinctes." };
+  }
+  const gate = canSwapOnPanel(a, b);
+  if (!gate.ok) return gate;
+  const next: PackedPanel = {
+    ...panel,
+    placements: panel.placements.map((p) => {
+      if (p.instanceId === a.instanceId) {
+        return { ...p, x: b.x, y: b.y };
+      }
+      if (p.instanceId === b.instanceId) {
+        return { ...p, x: a.x, y: a.y };
+      }
+      return p;
+    }),
+  };
+  return { ok: true, panel: next };
+}
+
+export function placementsToItems(panel: PackedPanel): Item[] {
+  return panel.placements.map((p) => ({
+    instanceId: p.instanceId,
+    defId: p.defId,
+    name: p.name,
+    w: p.w,
+    h: p.h,
+    canRotate: false,
+    familyId: panel.familyId,
+  }));
+}
+
+export function panelToSpec(panel: PackedPanel): PanelSpec {
+  return {
+    id: panel.format,
+    length: panel.length,
+    width: panel.width,
+    label: panel.label,
+    familyId: panel.familyId ?? "",
+    familyName: panel.familyName ?? "",
+    kind: panel.source === "offcut" ? "offcut" : "sheet",
+    stockItemId: panel.stockItemId,
+  };
+}
+
+export function packItemsOnSpec(
+  spec: PanelSpec,
+  items: Item[],
+  options: OptimizeOptions,
+): { panel: PackedPanel | null; unplaced: Item[] } {
+  const attempt = packOneBinBest(spec, items, options);
+  if (attempt.placements.length === 0) {
+    return { panel: null, unplaced: items.slice() };
+  }
+  return {
+    panel: toPackedPanel(spec, 1, attempt),
+    unplaced: attempt.remaining,
+  };
+}
+
+export function refreshStrategyMetrics(
+  strategy: StrategyResult,
+  specs: PanelSpec[],
+): StrategyResult {
+  return finishStrategy(
+    strategy.id,
+    strategy.label,
+    strategy.panels,
+    strategy.unplaced,
+    specs,
+  );
+}
+
+/** Recalcule un panneau en honorant les chutes verrouillées. Surplus → feuilles neuves. */
+export function repackLockedPanel(
+  panel: PackedPanel,
+  options: OptimizeOptions,
+): { panel: PackedPanel; extra: PackedPanel[]; unplaced: Item[] } {
+  const spec = panelToSpec(panel);
+  const items = placementsToItems(panel);
+  const occupied = panel.lockedRects ?? options.occupied ?? [];
+  const first = packOneBinBest(spec, items, { ...options, occupied });
+  const usedArea = first.usedArea;
+  const total = spec.length * spec.width;
+  const placed: PackedPanel = {
+    ...toPackedPanel(spec, panel.index, first),
+    id: panel.id,
+    index: panel.index,
+    source: panel.source,
+    stockItemId: panel.stockItemId,
+    familyId: panel.familyId,
+    familyName: panel.familyName,
+    lockedRects: occupied,
+    usedArea,
+    wasteArea: Math.max(0, total - usedArea),
+    wastePercent: total > 0 ? ((total - usedArea) / total) * 100 : 0,
+  };
+  let remaining = first.remaining;
+  const extra: PackedPanel[] = [];
+  while (remaining.length > 0) {
+    const attempt = packOneBinBest(spec, remaining, {
+      ...options,
+      occupied: [],
+    });
+    if (attempt.placements.length === 0) break;
+    extra.push(toPackedPanel(spec, extra.length + 1, attempt));
+    remaining = attempt.remaining;
+  }
+  return { panel: placed, extra, unplaced: remaining };
+}
+

@@ -145,7 +145,7 @@ export function JobNeedPanel({
                 className="flex flex-wrap items-baseline justify-between gap-2"
               >
                 <span>
-                  {l.name}
+                  {l.kind === "offcut" ? `${l.name} (stock)` : l.name}
                   {l.familyName ? ` · ${l.familyName}` : ""}
                 </span>
                 <span className="tabular-nums text-muted-foreground">
@@ -256,7 +256,9 @@ export function JobNeedPanel({
             <tbody>
               {plan.map((l) => (
                 <tr key={`${l.specId ?? l.name}`} className="border-b border-border last:border-0">
-                  <td className="px-3 py-2">{l.name}</td>
+                  <td className="px-3 py-2">
+                    {l.kind === "offcut" ? `${l.name} (stock)` : l.name}
+                  </td>
                   <td className="px-3 py-2 text-muted-foreground">
                     {l.familyName || "—"}
                   </td>

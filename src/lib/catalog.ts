@@ -45,6 +45,9 @@ export type PanelSpec = {
   familyId: string;
   familyName: string;
   pricePerM2?: number | null;
+  /** sheet = feuille catalogue ; offcut = chute stock (pas un achat). */
+  kind?: "sheet" | "offcut";
+  stockItemId?: string;
 };
 
 function nowIso(): string {

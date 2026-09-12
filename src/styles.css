@@ -124,6 +124,16 @@
     page-break-inside: avoid;
   }
 
+  body.print-atelier .print-page {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  body.print-atelier .print-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
   header,
   .app-footer {
     display: none !important;

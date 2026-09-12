@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { emptyRow, defaultQuoteIdentity } from "./presets.ts";
 import {
+  deriveJobStatus,
   duplicateProject,
   findProjectByName,
+  formatJobStatusLine,
+  migrateProject,
   parseImportedProject,
   serializeProject,
   snapshotProject,
@@ -120,6 +123,9 @@ test("dupliquer change l’id et le nom, pas les pièces, et n’emporte pas la 
   assert.match(copy.name, /copie/);
   assert.equal(copy.rows[0]?.name, "Côté gauche");
   assert.equal(copy.stockDeduction, null);
+  assert.equal(copy.stockDeductedAt, undefined);
+  assert.equal(copy.quoteIssuedAt, undefined);
+  assert.equal(copy.calculatedAt, undefined);
   assert.equal(copy.supplierSnapshot?.weightedPricePerM2, 20);
 });
 
@@ -146,3 +152,72 @@ test("snapshot n’embarque pas le stock atelier", () => {
   assert.equal(p.supplierSnapshot, null);
   assert.equal(p.stockDeduction, null);
 });
+
+test("projet ancien : grain default, déduction → stock_deduit", () => {
+  const p = migrateProject({
+    id: "old",
+    name: "Chantier",
+    description: "",
+    clientName: "",
+    notes: "",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-02T00:00:00.000Z",
+    rows: [{ id: "1", name: "Montant", length: "1800", width: "380", qty: "2" }],
+    settings: sampleSettings(),
+    selectedStrategy: "mixed",
+    usedRefIds: ["A"],
+    stockDeduction: {
+      id: "d1",
+      date: "2026-09-12T10:00:00.000Z",
+      quoteNumber: "X",
+      projectId: "old",
+      projectName: "Chantier",
+      partial: false,
+      lines: [],
+    },
+  });
+  assert.equal(p.rows[0]?.grain, "default");
+  assert.equal(p.rows[0]?.group, "");
+  assert.equal(p.stockDeductedAt, "2026-09-12T10:00:00.000Z");
+  assert.equal(p.calculatedAt, "2026-01-02T00:00:00.000Z");
+  assert.equal(
+    deriveJobStatus({
+      hasValidPack: false,
+      calculatedAt: p.calculatedAt,
+      stockDeductedAt: p.stockDeductedAt,
+      quoteIssuedAt: p.quoteIssuedAt,
+      stockDeduction: p.stockDeduction,
+    }),
+    "stock_deduit",
+  );
+  assert.match(
+    formatJobStatusLine({
+      hasValidPack: true,
+      calculatedAt: p.calculatedAt,
+      stockDeductedAt: p.stockDeductedAt,
+      quoteIssuedAt: null,
+    }),
+    /Calepiné · Stock déduit le 12\/09\/2026 · Devis non émis/,
+  );
+});
+
+test("statut devis_emis prime, brouillon sans pack", () => {
+  assert.equal(
+    deriveJobStatus({
+      hasValidPack: true,
+      calculatedAt: "x",
+      stockDeductedAt: "y",
+      quoteIssuedAt: "z",
+    }),
+    "devis_emis",
+  );
+  assert.equal(
+    deriveJobStatus({ hasValidPack: false }),
+    "brouillon",
+  );
+  assert.equal(
+    deriveJobStatus({ hasValidPack: true, calculatedAt: "x" }),
+    "calepine",
+  );
+});
+

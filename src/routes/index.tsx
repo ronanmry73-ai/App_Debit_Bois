@@ -24,17 +24,30 @@ import { JobNeedPanel } from "@/components/job-need-panel";
 import { SupplierCostPanel } from "@/components/supplier-cost-panel";
 import { AtelierSheet } from "@/components/atelier-sheet";
 import { HardwareList } from "@/components/hardware-list";
+import { JobStatusBadge } from "@/components/job-status-badge";
 import {
   optimizeCutting,
+  refreshStrategyMetrics,
+  repackLockedPanel,
+  stockableLeftovers,
+  swapOnPanel,
+  type FreeRect,
+  type OccupiedRect,
   type OptimizeOutput,
+  type PackedPanel,
   type PieceDef,
   type StrategyId,
+  type StrategyResult,
 } from "@/lib/packing";
 import { incompleteSelling, planWastePct, sellingFromInputs } from "@/lib/pricing";
 import {
+  emptyOffcutItem,
   ensureStockArticle,
   exampleStock,
-  jobNeedFromQuote,
+  jobNeedFromStrategy,
+  nameOffcut,
+  offcutBinsFromStock,
+  recordMove,
   syncStockWithCatalog,
   type StockDeduction,
   type StockItem,
@@ -64,6 +77,7 @@ import {
   uniqueImportedName,
   usedRefIdsFromProjects,
   type Project,
+  type JobStatusInput,
 } from "@/lib/projects";
 import {
   applyWindowTitle,
@@ -77,6 +91,8 @@ import {
 import type { AppSettings, PieceRow } from "@/lib/types";
 import { effectivePurchasePrice, supplierCostFromCounts } from "@/lib/supplier";
 import { newId, cn } from "@/lib/utils";
+import { cuttingCsv, strategyDxf } from "@/lib/saw-export";
+import { pieceCanRotate } from "@/lib/piece-io";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -105,9 +121,14 @@ type DialogState =
   | { kind: "delete"; id: string }
   | { kind: "import-dup"; project: Project; catalog?: Catalog }
   | { kind: "clear-rows" }
-  | { kind: "alert"; title: string; message: string };
+  | { kind: "alert"; title: string; message: string }
+  | { kind: "stock-plan-offcuts" };
 
-function parseRows(rows: PieceRow[], catalog: Catalog): PieceDef[] {
+function parseRows(
+  rows: PieceRow[],
+  catalog: Catalog,
+  allowRotation: boolean,
+): PieceDef[] {
   return rows
     .map((r) => ({
       id: r.id,
@@ -117,6 +138,7 @@ function parseRows(rows: PieceRow[], catalog: Catalog): PieceDef[] {
       qty: Math.floor(Number(String(r.qty).replace(",", "."))),
       familyId: r.familyId || null,
       familyName: catalog.families.find((f) => f.id === r.familyId)?.name ?? null,
+      canRotate: pieceCanRotate(r.grain, allowRotation),
     }))
     .filter(
       (p) =>
@@ -143,9 +165,12 @@ function usedFromOutput(out: OptimizeOutput | null): string[] {
   const ids = new Set<string>();
   for (const s of out.strategies) {
     for (const [id, n] of Object.entries(s.counts)) {
-      if (n > 0) ids.add(id);
+      if (n > 0 && !id.startsWith("offcut:")) ids.add(id);
     }
-    for (const p of s.panels) ids.add(p.format);
+    for (const p of s.panels) {
+      if (p.source === "offcut" || p.format.startsWith("offcut:")) continue;
+      ids.add(p.format);
+    }
   }
   return [...ids];
 }
@@ -159,6 +184,15 @@ function printSheet(kind: "atelier" | "client") {
   };
   window.addEventListener("afterprint", cleanup);
   window.print();
+}
+
+function packIsValid(out: OptimizeOutput | null, selected: string): boolean {
+  if (!out) return false;
+  const s =
+    out.strategies.find((x) => x.id === selected) ??
+    out.strategies.find((x) => x.id === out.bestId) ??
+    null;
+  return !!s && s.panels.some((p) => p.placements.length > 0);
 }
 
 function Home() {
@@ -184,9 +218,16 @@ function Home() {
   const [viewMode, setViewMode] = useState<ViewMode>("atelier");
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [workshopPrefs, setWorkshopPrefs] = useState<WorkshopPrefs>(emptyWorkshopPrefs);
+  const [calculatedAt, setCalculatedAt] = useState<string | null>(null);
+  const [quoteIssuedAt, setQuoteIssuedAt] = useState<string | null>(null);
   const skipNextPack = useRef(false);
   const skipWastePrefill = useRef(true);
   const lastPlanId = useRef("");
+  const tauPrompted = useRef("");
+  const [lastSwap, setLastSwap] = useState<{
+    strategyId: string;
+    panel: PackedPanel;
+  } | null>(null);
 
   const liveFp = useMemo(
     () => fpOf({ rows, settings, selected, meta: projectMeta }),
@@ -198,6 +239,15 @@ function Home() {
     () => packingSpecs(catalog, usedRefIds),
     [catalog, usedRefIds],
   );
+  const jobScopeId = currentProjectId ?? "draft";
+
+  function packingOffcuts() {
+    return offcutBinsFromStock(stock, jobScopeId).map((b) => ({
+      ...b,
+      familyName:
+        catalog.families.find((f) => f.id === b.familyId)?.name ?? b.familyName,
+    }));
+  }
 
   const blockedRefIds = useMemo(() => {
     const ids = new Set(usedRefIds);
@@ -234,6 +284,8 @@ function Home() {
         setSelected(saved.selectedStrategy || "mixed");
         setWorkshopPrefs(prefs);
         setStockDeduction(named?.stockDeduction ?? saved.stockDeduction ?? null);
+        setCalculatedAt(named?.calculatedAt ?? saved.calculatedAt ?? null);
+        setQuoteIssuedAt(named?.quoteIssuedAt ?? saved.quoteIssuedAt ?? null);
         setCurrentProjectId(saved.currentProjectId || newId());
         setSavedFp(
           named
@@ -280,6 +332,8 @@ function Home() {
         usedRefIds,
         stockDeduction,
         workshopPrefs,
+        calculatedAt,
+        quoteIssuedAt,
       });
     }, 280);
     return () => clearTimeout(t);
@@ -297,6 +351,8 @@ function Home() {
     usedRefIds,
     stockDeduction,
     workshopPrefs,
+    calculatedAt,
+    quoteIssuedAt,
   ]);
 
   useEffect(() => {
@@ -304,9 +360,10 @@ function Home() {
     if (skipNextPack.current) {
       skipNextPack.current = false;
     }
-    const defs = parseRows(rows, catalog);
+    const defs = parseRows(rows, catalog, settings.allowRotation);
     if (defs.length === 0) {
       setResult(null);
+      setCalculatedAt(null);
       return;
     }
     const totalQty = defs.reduce((s, d) => s + d.qty, 0);
@@ -327,8 +384,15 @@ function Home() {
       allowRotation: settings.allowRotation,
       method: settings.method,
       specs,
+      offcuts: packingOffcuts(),
     });
+    setLastSwap(null);
     setResult(out);
+    setCalculatedAt((prev) =>
+      packIsValid(out, selected) || packIsValid(out, out.bestId)
+        ? prev ?? new Date().toISOString()
+        : null,
+    );
     setUsedRefIds((prev) => {
       const next = new Set(prev);
       let changed = false;
@@ -367,7 +431,7 @@ function Home() {
   function calculate() {
     skipWastePrefill.current = false;
     lastPlanId.current = "";
-    const defs = parseRows(rows, catalog);
+    const defs = parseRows(rows, catalog, settings.allowRotation);
     if (defs.length === 0) {
       setResult(null);
       setError("Ajoutez au moins une pièce avec longueur, largeur et quantité.");
@@ -388,8 +452,13 @@ function Home() {
     const out = optimizeCutting(defs, {
       ...settings,
       specs,
+      offcuts: packingOffcuts(),
     });
+    setLastSwap(null);
     setResult(out);
+    setCalculatedAt((prev) =>
+      packIsValid(out, out.bestId) ? prev ?? new Date().toISOString() : null,
+    );
     setUsedRefIds((prev) => {
       const next = new Set(prev);
       let changed = false;
@@ -524,8 +593,210 @@ function Home() {
   );
 
   const jobNeed = current
-    ? jobNeedFromQuote(current.counts, settings.hardwareItems, specLabels)
+    ? jobNeedFromStrategy(current, settings.hardwareItems, specLabels)
     : null;
+
+  const stockedOffcutKeys = useMemo(() => {
+    const s = new Set<string>();
+    for (const it of stock) {
+      if (it.kind !== "offcut") continue;
+      if (it.sourceProjectId && it.sourceProjectId !== jobScopeId) continue;
+      if (it.sourcePanelIndex && it.length && it.width) {
+        s.add(
+          `${it.sourcePanelIndex}:${Math.round(it.length)}x${Math.round(it.width)}`,
+        );
+      }
+    }
+    return s;
+  }, [stock, jobScopeId]);
+
+  function patchStrategy(mutator: (s: StrategyResult) => StrategyResult) {
+    setResult((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        strategies: prev.strategies.map((s) =>
+          s.id === selected ? mutator(s) : s,
+        ),
+      };
+    });
+  }
+
+  function stockLeftover(panel: PackedPanel, rect: FreeRect) {
+    const name = nameOffcut(projectMeta.name, panel.index, rect.w, rect.h);
+    const dup = stock.find(
+      (it) =>
+        it.kind === "offcut" &&
+        it.sourceProjectId === jobScopeId &&
+        it.sourcePanelIndex === panel.index &&
+        it.length === rect.w &&
+        it.width === rect.h &&
+        it.qty > 0,
+    );
+    if (dup) {
+      setFlash("Cette chute est déjà en stock.");
+      return;
+    }
+    const item = emptyOffcutItem({
+      name,
+      length: rect.w,
+      width: rect.h,
+      familyId: panel.familyId,
+      sourceProjectId: jobScopeId,
+      sourceProjectName: projectMeta.name.trim() || "Sans titre",
+      sourcePanelIndex: panel.index,
+      qty: 1,
+      usable: true,
+    });
+    setStock((prev) => [...prev, item]);
+    setMoves((prev) =>
+      recordMove(prev, item.id, "in", 1, "Chute du plan", settings.quoteNumber, {
+        projectId: jobScopeId,
+        projectName: projectMeta.name,
+      }),
+    );
+    setFlash(`${name} mise en stock.`);
+  }
+
+  function stockAllPlanOffcuts() {
+    if (!current) return;
+    for (const panel of current.panels) {
+      for (const rect of stockableLeftovers(panel, settings.kerf)) {
+        stockLeftover(panel, rect);
+      }
+    }
+  }
+
+  function handleWastePct(n: number) {
+    setSettings((s) => ({ ...s, wastePct: n }));
+    if (!current) return;
+    const leftovers = current.panels.flatMap((p) =>
+      stockableLeftovers(p, settings.kerf),
+    );
+    const planKey = `${selected}:${current.purchasedArea}`;
+    if (
+      n < tauPlan - 0.05 &&
+      leftovers.length > 0 &&
+      tauPrompted.current !== planKey
+    ) {
+      tauPrompted.current = planKey;
+      setDialog({ kind: "stock-plan-offcuts" });
+    }
+  }
+
+  function handleSwap(
+    panelId: string,
+    a: string,
+    b: string,
+  ): { ok: true } | { ok: false; reason: string } {
+    if (!current) return { ok: false, reason: "Aucun plan." };
+    const panel = current.panels.find((p) => p.id === panelId);
+    if (!panel) return { ok: false, reason: "Panneau introuvable." };
+    const res = swapOnPanel(panel, a, b);
+    if (!res.ok) return res;
+    setLastSwap({ strategyId: selected, panel });
+    patchStrategy((s) => ({
+      ...s,
+      panels: s.panels.map((p) => (p.id === panelId ? res.panel : p)),
+    }));
+    setFlash("Pièces échangées. Le devis matière est inchangé.");
+    return { ok: true };
+  }
+
+  function handleUndoSwap() {
+    if (!lastSwap || !current) return;
+    patchStrategy((s) => ({
+      ...s,
+      panels: s.panels.map((p) =>
+        p.id === lastSwap.panel.id ? lastSwap.panel : p,
+      ),
+    }));
+    setLastSwap(null);
+    setFlash("Échange annulé.");
+  }
+
+  function handleLock(panelId: string, rect: OccupiedRect) {
+    patchStrategy((s) => ({
+      ...s,
+      panels: s.panels.map((p) =>
+        p.id === panelId
+          ? { ...p, lockedRects: [...(p.lockedRects ?? []), rect] }
+          : p,
+      ),
+    }));
+    setFlash("Chute verrouillée. Recalculez ce panneau pour l’honorer.");
+  }
+
+  function handleUnlock(panelId: string, rect: OccupiedRect) {
+    patchStrategy((s) => ({
+      ...s,
+      panels: s.panels.map((p) =>
+        p.id === panelId
+          ? {
+              ...p,
+              lockedRects: (p.lockedRects ?? []).filter(
+                (r) =>
+                  !(r.x === rect.x && r.y === rect.y && r.w === rect.w && r.h === rect.h),
+              ),
+            }
+          : p,
+      ),
+    }));
+  }
+
+  function handleRecalcPanel(panelId: string) {
+    if (!current) return;
+    const panel = current.panels.find((p) => p.id === panelId);
+    if (!panel) return;
+    const packed = repackLockedPanel(panel, {
+      kerf: settings.kerf,
+      allowRotation: settings.allowRotation,
+      method: settings.method,
+      specs,
+    });
+    patchStrategy((s) => {
+      const others = s.panels.filter((p) => p.id !== panelId);
+      const nextPanels = [packed.panel, ...packed.extra, ...others];
+      const next: StrategyResult = {
+        ...s,
+        panels: nextPanels,
+        unplaced: [...packed.unplaced, ...s.unplaced.filter((u) =>
+          !nextPanels.some((p) => p.placements.some((pl) => pl.instanceId === u.instanceId)),
+        )],
+      };
+      return refreshStrategyMetrics(next, specs);
+    });
+    setLastSwap(null);
+    if (packed.extra.length > 0) {
+      setFlash(
+        `Chute verrouillée respectée. ${packed.extra.length} feuille${packed.extra.length > 1 ? "s" : ""} de plus.`,
+      );
+    } else {
+      setFlash("Panneau recalculé. La chute verrouillée reste vide.");
+    }
+  }
+
+  async function exportCsv() {
+    if (!current) return;
+    const name = (projectMeta.name.trim() || "debit").replace(/[^\wÀ-ÿ-]+/g, "-");
+    const ok = await exportText(
+      `${name}-scie.csv`,
+      cuttingCsv(current, { rows, catalog }),
+      "text/csv;charset=utf-8",
+    );
+    if (ok) setFlash("CSV scie exporté.");
+  }
+
+  async function exportDxf() {
+    if (!current) return;
+    const name = (projectMeta.name.trim() || "debit").replace(/[^\wÀ-ÿ-]+/g, "-");
+    const ok = await exportText(
+      `${name}-plans.dxf`,
+      strategyDxf(current),
+      "application/dxf;charset=utf-8",
+    );
+    if (ok) setFlash("DXF exporté.");
+  }
 
   function guardUnsaved(next: () => void) {
     if (!dirty) {
@@ -550,6 +821,9 @@ function Home() {
       usedRefIds: [...new Set([...usedRefIds, ...usedFromOutput(result)])],
       supplierSnapshot: liveSupplier,
       stockDeduction,
+      calculatedAt,
+      stockDeductedAt: stockDeduction?.date ?? null,
+      quoteIssuedAt,
     });
   }
 
@@ -642,6 +916,8 @@ function Home() {
     setSelected("mixed");
     setSettings(nextSettings);
     setStockDeduction(null);
+    setCalculatedAt(null);
+    setQuoteIssuedAt(null);
     setCatalogOpen(false);
     setViewMode("atelier");
     setSavedFp(
@@ -663,6 +939,8 @@ function Home() {
     setSettings({ ...DEFAULT_SETTINGS, ...p.settings, clientName });
     setSelected(p.selectedStrategy || "mixed");
     setStockDeduction(p.stockDeduction ?? null);
+    setCalculatedAt(p.calculatedAt ?? null);
+    setQuoteIssuedAt(p.quoteIssuedAt ?? null);
     rememberSaved(p);
     setError(null);
     setFlash(`Projet « ${p.name} » ouvert.`);
@@ -730,6 +1008,18 @@ function Home() {
   const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
   const stockWide = !catalogOpen && viewMode === "stock";
   const shellWidth = stockWide ? "max-w-none" : "max-w-6xl";
+  const jobStatus: JobStatusInput = {
+    hasValidPack: packIsValid(result, selected),
+    calculatedAt,
+    stockDeductedAt: stockDeduction?.date ?? currentProject?.stockDeductedAt ?? null,
+    quoteIssuedAt,
+    stockDeduction,
+  };
+
+  function printClient() {
+    setQuoteIssuedAt((prev) => prev ?? new Date().toISOString());
+    printSheet("client");
+  }
 
   return (
     <div className="min-h-dvh">
@@ -749,6 +1039,9 @@ function Home() {
                 {dirty ? " •" : ""}
                 {" — poste d’atelier"}
               </p>
+              <div className="mt-1">
+                <JobStatusBadge info={jobStatus} />
+              </div>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -806,7 +1099,7 @@ function Home() {
             {viewMode === "devis" && !catalogOpen && (
               <Button
                 type="button"
-                onClick={() => printSheet("client")}
+                onClick={() => (current ? printClient() : goDevis())}
                 disabled={!result || !current}
               >
                 <FileText />
@@ -911,6 +1204,7 @@ function Home() {
               onImport={() => {
                 void handleImport();
               }}
+              jobStatus={jobStatus}
             />
 
             <Card className="no-print">
@@ -988,7 +1282,7 @@ function Home() {
                 kerf={settings.kerf}
                 wastePct={settings.wastePct}
                 planWastePct={tauPlan}
-                onWastePct={(wastePct) => setSettings((s) => ({ ...s, wastePct }))}
+                onWastePct={handleWastePct}
                 onResetWaste={() => {
                   skipWastePrefill.current = false;
                   setSettings((s) => ({ ...s, wastePct: tauPlan }));
@@ -996,6 +1290,19 @@ function Home() {
                 supplier={liveSupplier}
                 hardware={settings.hardwareItems}
                 onPrint={() => printSheet("atelier")}
+                onExportCsv={exportCsv}
+                onExportDxf={exportDxf}
+                planActions={{
+                  interactive: true,
+                  onStockOffcut: stockLeftover,
+                  stockedKeys: stockedOffcutKeys,
+                  onSwap: handleSwap,
+                  onUndoSwap: handleUndoSwap,
+                  canUndoSwap: !!lastSwap && lastSwap.strategyId === selected,
+                  onLockLeftover: handleLock,
+                  onUnlockLeftover: handleUnlock,
+                  onRecalcPanel: handleRecalcPanel,
+                }}
               />
             )}
 
@@ -1045,6 +1352,7 @@ function Home() {
                           ? {
                               ...p,
                               stockDeduction: d,
+                              stockDeductedAt: d ? d.date : undefined,
                               updatedAt: new Date().toISOString(),
                             }
                           : p,
@@ -1129,6 +1437,19 @@ function Home() {
               {projectMeta.clientName ? ` · ${projectMeta.clientName}` : ""}
               . Les plans restent dans Atelier. Ici : devis client.
             </p>
+            <div className="no-print flex flex-wrap items-center gap-2">
+              <JobStatusBadge info={jobStatus} />
+              {quoteIssuedAt ? null : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setQuoteIssuedAt(new Date().toISOString())}
+                >
+                  Marquer le devis émis
+                </Button>
+              )}
+            </div>
             <QuotePanel
               settings={settings}
               onChange={patchSettings}
@@ -1137,7 +1458,7 @@ function Home() {
               planWastePct={tauPlan}
               livePricePerM2={liveSupplier?.weightedPricePerM2 ?? null}
               supplier={liveSupplier}
-              onGenerateQuote={() => (current ? printSheet("client") : goDevis())}
+              onGenerateQuote={() => (current ? printClient() : goDevis())}
               onResetWaste={() => {
                 skipWastePrefill.current = false;
                 setSettings((s) => ({ ...s, wastePct: tauPlan }));
@@ -1151,7 +1472,7 @@ function Home() {
                 selling={selling}
                 strategy={current}
                 supplier={liveSupplier}
-                onPrint={() => printSheet("client")}
+                onPrint={() => printClient()}
               />
             ) : (
               <p className="no-print rounded-xl bg-card px-5 py-8 text-center text-sm text-muted-foreground shadow-[var(--shadow-border)]">
@@ -1376,6 +1697,26 @@ function Home() {
           {
             label: "OK",
             onClick: () => setDialog({ kind: "none" }),
+          },
+        ]}
+      />
+
+      <ConfirmDialog
+        open={dialog.kind === "stock-plan-offcuts"}
+        title="τ < chute du plan"
+        message="Mettre les chutes du plan en stock ? Elles ne sont pas créées automatiquement. Le prochain calepinage s’en servira avant d’acheter une feuille neuve."
+        actions={[
+          {
+            label: "Plus tard",
+            variant: "ghost",
+            onClick: () => setDialog({ kind: "none" }),
+          },
+          {
+            label: "Mettre en stock",
+            onClick: () => {
+              stockAllPlanOffcuts();
+              setDialog({ kind: "none" });
+            },
           },
         ]}
       />

@@ -27,7 +27,16 @@ export function exampleQuoteRows(): PieceRow[] {
 }
 
 export function emptyRow(): PieceRow {
-  return { id: newId(), name: "", length: "", width: "", qty: "1", familyId: "" };
+  return {
+    id: newId(),
+    name: "",
+    length: "",
+    width: "",
+    qty: "1",
+    familyId: "",
+    grain: "default",
+    group: "",
+  };
 }
 
 /** Rangée initiale SSR-stable (évite un décalage d’hydratation). */
@@ -38,6 +47,8 @@ export const INITIAL_EMPTY_ROW: PieceRow = {
   width: "",
   qty: "1",
   familyId: "",
+  grain: "default",
+  group: "",
 };
 
 export function emptyHardwareItem(): HardwareItem {

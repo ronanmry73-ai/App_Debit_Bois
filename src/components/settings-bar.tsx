@@ -62,7 +62,7 @@ export function SettingsBar({ settings, onChange }: Props) {
         <div>
           <Label htmlFor="rotation">Autoriser la rotation 90°</Label>
           <p className="mt-1 text-xs text-muted-foreground">
-            Utile si le fil du bois n’est pas imposé
+            Défaut des pièces en Fil « Job ». Imposé = ne pas tourner.
           </p>
         </div>
         <Switch

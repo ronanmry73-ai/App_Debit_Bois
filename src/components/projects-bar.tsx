@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { Project, ProjectSummary } from "@/lib/projects";
+import type { Project, ProjectSummary, JobStatusInput } from "@/lib/projects";
 import type { ProjectMeta } from "@/lib/persist";
+import { JobStatusBadge } from "@/components/job-status-badge";
 
 type SortKey = "name" | "createdAt" | "updatedAt";
 
@@ -25,6 +26,7 @@ type Props = {
   onDelete: (id: string) => void;
   onExport: () => void;
   onImport: () => void;
+  jobStatus: JobStatusInput;
 };
 
 function formatDate(iso: string): string {
@@ -56,6 +58,7 @@ export function ProjectsBar({
   onDelete,
   onExport,
   onImport,
+  jobStatus,
 }: Props) {
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortKey>("updatedAt");
@@ -94,6 +97,9 @@ export function ProjectsBar({
                       dirty ? " — modifications non enregistrées" : " — pas encore enregistré"
                     }`}
               </p>
+              <div className="mt-2">
+                <JobStatusBadge info={jobStatus} />
+              </div>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" onClick={onNew}>

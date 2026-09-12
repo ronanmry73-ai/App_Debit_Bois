@@ -10,7 +10,8 @@ import {
   migrateWorkshopPrefs,
   type WorkshopPrefs,
 } from "./presets.ts";
-import { snapshotProject, type Project } from "./projects.ts";
+import { snapshotProject, migrateProject, type Project } from "./projects.ts";
+import { migratePieceRows } from "./piece-io.ts";
 import {
   exampleStock,
   migrateStockItems,
@@ -44,6 +45,8 @@ export type PersistedState = {
   usedRefIds: string[];
   stockDeduction: StockDeduction | null;
   workshopPrefs: WorkshopPrefs;
+  calculatedAt: string | null;
+  quoteIssuedAt: string | null;
 };
 
 export function emptyMeta(): ProjectMeta {
@@ -85,6 +88,8 @@ export function migrateState(
     usedRefIds: [],
     stockDeduction: null,
     workshopPrefs: emptyWorkshopPrefs(),
+    calculatedAt: null,
+    quoteIssuedAt: null,
   };
   if (!raw || typeof raw !== "object") return base;
   const o = raw as Record<string, unknown>;
@@ -93,12 +98,14 @@ export function migrateState(
     : defaults.settings;
   const rows =
     Array.isArray(o.rows) && o.rows.length > 0
-      ? (o.rows as PieceRow[])
+      ? migratePieceRows(o.rows)
       : base.rows;
   const stock = migrateStockItems(o.stock);
   const moves = Array.isArray(o.moves) ? (o.moves as StockMove[]) : [];
   const catalog = migrateCatalog(o.catalog);
-  let projects = Array.isArray(o.projects) ? (o.projects as Project[]) : [];
+  let projects = Array.isArray(o.projects)
+    ? (o.projects as Project[]).map(migrateProject)
+    : [];
   const projectMeta: ProjectMeta = {
     ...emptyMeta(),
     ...((o.projectMeta as Partial<ProjectMeta>) ?? {}),
@@ -139,6 +146,17 @@ export function migrateState(
     projectMeta.description = converted.description;
   }
 
+  const named =
+    currentProjectId ? projects.find((p) => p.id === currentProjectId) : undefined;
+  const calculatedAt =
+    typeof o.calculatedAt === "string"
+      ? o.calculatedAt
+      : named?.calculatedAt ?? null;
+  const quoteIssuedAt =
+    typeof o.quoteIssuedAt === "string"
+      ? o.quoteIssuedAt
+      : named?.quoteIssuedAt ?? null;
+
   return {
     version: 5,
     rows,
@@ -154,6 +172,8 @@ export function migrateState(
     usedRefIds,
     stockDeduction,
     workshopPrefs,
+    calculatedAt,
+    quoteIssuedAt,
   };
 }
 
@@ -218,17 +238,18 @@ export function applyWindowTitle(name: string, dirty: boolean): void {
 export async function exportText(
   suggestedName: string,
   content: string,
+  mime = "application/json;charset=utf-8",
 ): Promise<boolean> {
   const desktop = desktopApi();
   if (desktop?.exportFile) {
     return desktop.exportFile(suggestedName, content);
   }
   if (typeof document === "undefined") return false;
-  const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+  const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = suggestedName.endsWith(".json")
+  a.download = /\.[A-Za-z0-9]+$/.test(suggestedName)
     ? suggestedName
     : `${suggestedName}.json`;
   a.click();

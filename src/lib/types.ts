@@ -1,5 +1,7 @@
 import type { PackMethod, StrategyId } from "./packing.ts";
 
+export type GrainMode = "default" | "locked" | "free";
+
 export type PieceRow = {
   id: string;
   name: string;
@@ -8,7 +10,18 @@ export type PieceRow = {
   qty: string;
   /** Famille prioritaire, vide = règles générales. */
   familyId?: string;
+  /**
+   * Fil du bois.
+   * - default : suit le toggle du job (allowRotation)
+   * - locked : jamais tournée
+   * - free : rotation autorisée même si le job l’interdit
+   */
+  grain?: GrainMode;
+  /** Sous-ensemble libre (Caisson, Étagères…). Vide = non groupé. */
+  group?: string;
 };
+
+export type JobStatus = "brouillon" | "calepine" | "stock_deduit" | "devis_emis";
 
 export type HardwareItem = {
   id: string;

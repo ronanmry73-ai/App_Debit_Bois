@@ -56,10 +56,15 @@ export function ResultsPanel({
           const isSel = s.id === selected;
           const cost = costOf(s, specs);
           const total = countTotal(s.counts);
-          const mix = Object.entries(s.counts)
-            .filter(([, n]) => n > 0)
-            .map(([id, n]) => `${n} × ${specLabel(id, specs)}`)
-            .join(" · ");
+          const offcutN = (s.offcutsUsed ?? []).reduce((n, o) => n + o.qty, 0);
+          const mix = [
+            ...Object.entries(s.counts)
+              .filter(([, n]) => n > 0)
+              .map(([id, n]) => `${n} × ${specLabel(id, specs)}`),
+            ...((s.offcutsUsed ?? []).map(
+              (o) => `${o.qty} chute ${Math.round(o.length)}×${Math.round(o.width)}`,
+            )),
+          ].join(" · ");
           return (
             <button
               key={s.id}
@@ -83,8 +88,13 @@ export function ResultsPanel({
               <p className="mt-3 font-display text-3xl font-medium tabular-nums tracking-tight">
                 {total}
                 <span className="ml-1.5 text-base font-normal text-muted-foreground">
-                  panneau{total > 1 ? "x" : ""}
+                  feuille{total > 1 ? "s" : ""}
                 </span>
+                {offcutN > 0 && (
+                  <span className="ml-2 text-base font-normal text-muted-foreground">
+                    · {offcutN} chute{offcutN > 1 ? "s" : ""}
+                  </span>
+                )}
               </p>
               <p className="mt-1 text-sm tabular-nums text-muted-foreground">{mix}</p>
               <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
@@ -142,6 +152,18 @@ export function ResultsPanel({
                   />
                 );
               })}
+            {(current.offcutsUsed ?? []).map((o) => {
+              const hand = stock.find((it) => it.id === o.stockItemId)?.qty ?? 0;
+              return (
+                <BuyStat
+                  key={o.stockItemId}
+                  label={`Chute ${Math.round(o.length)} × ${Math.round(o.width)} mm`}
+                  value={o.qty}
+                  onHand={hand}
+                  gap={Math.max(0, o.qty - hand)}
+                />
+              );
+            })}
           </div>
           <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-border pt-4 text-sm sm:grid-cols-4">
             <div>

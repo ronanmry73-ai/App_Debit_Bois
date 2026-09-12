@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { DEFAULT_SPECS, optimizeCutting } from "./packing.ts";
 import {
   consumeForJob,
   coverage,
+  emptyOffcutItem,
   ensureStockArticle,
   exampleStock,
   hasShortage,
   isPlaceholderDate,
   jobNeedFromQuote,
+  jobNeedFromStrategy,
+  migrateStockItems,
+  offcutBinsFromStock,
   PLACEHOLDER_STOCK_DATE,
   restoreDeduction,
   stockStatus,
@@ -36,6 +41,7 @@ test("couverture devis : 2 panneaux 400 + 4 charnières + 2 poignées", () => {
   const a = lines.find((l) => l.key === "panel-A");
   assert.equal(a?.needed, 2);
   assert.equal(a?.onHand, 10);
+  assert.equal(a?.kind, "panel");
   assert.equal(toOrder(lines).length, 0);
 });
 
@@ -121,4 +127,74 @@ test("valeur stock : articles sans prix exclus et comptés à part", () => {
       .filter((it) => it.unitCost > 0)
       .reduce((s, it) => s + it.qty * it.unitCost, 0),
   );
+});
+
+test("chute : bacs, skip projet source, déduction distincte des feuilles", () => {
+  const oc = emptyOffcutItem({
+    id: "oc1",
+    name: "Chute JobA · P1 · 1200×380",
+    length: 1200,
+    width: 380,
+    familyId: "fam-standard",
+    qty: 1,
+    sourceProjectId: "job-a",
+  });
+  const items = [...exampleStock(), oc];
+  const bins = offcutBinsFromStock(items, "job-a");
+  assert.equal(bins.length, 0, "ne pas manger sa propre chute");
+  const binsB = offcutBinsFromStock(items, "job-b");
+  assert.equal(binsB.length, 1);
+  assert.equal(binsB[0]!.length, 1200);
+
+  const packed = optimizeCutting(
+    [
+      {
+        id: "t",
+        name: "Tablette",
+        length: 800,
+        width: 350,
+        qty: 1,
+        familyId: "fam-standard",
+        familyName: "Standard",
+      },
+    ],
+    {
+      kerf: 3,
+      allowRotation: true,
+      method: "auto",
+      specs: DEFAULT_SPECS,
+      offcuts: binsB,
+    },
+  );
+  const best = packed.strategies.find((s) => s.id === packed.bestId)!;
+  const need = jobNeedFromStrategy(best, []);
+  assert.equal(need.offcuts?.length, 1);
+  const lines = coverage(items, need, DEFAULT_SPECS);
+  const off = lines.find((l) => l.kind === "offcut");
+  assert.ok(off);
+  assert.equal(off?.needed, 1);
+  const out = consumeForJob(items, [], need, "B", false);
+  assert.equal(out.ok, true);
+  assert.equal(out.items.find((i) => i.id === "oc1")?.qty, 0);
+  assert.equal(out.items.find((i) => i.id === "stock-panel-A")?.qty, 10);
+});
+
+test("migrateStockItems : chute sans usable → vivante", () => {
+  const raw = [
+    {
+      id: "oc-old",
+      kind: "offcut",
+      name: "Chute",
+      sku: "",
+      qty: 1,
+      unit: "pièce",
+      unitCost: 0,
+      minQty: 0,
+      length: 1200,
+      width: 400,
+    },
+  ];
+  const next = migrateStockItems(raw);
+  assert.equal(next[0]!.usable, true);
+  assert.equal(next[0]!.kind, "offcut");
 });

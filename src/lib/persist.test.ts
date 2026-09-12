@@ -163,6 +163,9 @@ test("v5 conserve prix catalogue, stock atelier global et déduction", () => {
   assert.equal(migrated.projects[0]?.supplierSnapshot?.weightedPricePerM2, 18.5);
   assert.equal(migrated.stockDeduction?.id, "d1");
   assert.equal(migrated.projects[0]?.stockDeduction?.id, "d1");
+  assert.equal(migrated.projects[0]?.rows[0]?.grain, "default");
+  assert.equal(migrated.projects[0]?.stockDeductedAt, "2026-01-01T00:00:00.000Z");
+  assert.equal(migrated.calculatedAt, "2026-01-01T00:00:00.000Z");
 });
 
 test("titre fenêtre = nom du projet, puce si dirty", () => {

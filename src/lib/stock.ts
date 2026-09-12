@@ -9,12 +9,13 @@ import { familyById } from "./catalog.ts";
 import { hardwareLines, parseAmount } from "./pricing.ts";
 import { panelAreaM2 } from "./supplier.ts";
 import { newId } from "./utils.ts";
+import type { OffcutBin, StrategyResult } from "./packing.ts";
 
 export const PANEL_A_ID = "stock-panel-A";
 export const PANEL_B_ID = "stock-panel-B";
 export const PLACEHOLDER_STOCK_DATE = "2024-01-01T00:00:00.000Z";
 
-export type StockKind = "panel-A" | "panel-B" | "hardware" | "other";
+export type StockKind = "panel-A" | "panel-B" | "hardware" | "other" | "offcut";
 
 export type StockItem = {
   id: string;
@@ -31,6 +32,11 @@ export type StockItem = {
   width?: number;
   notes?: string;
   updatedAt?: string;
+  /** Chute vivante (utilisable par le solveur). Défaut true. */
+  usable?: boolean;
+  sourceProjectId?: string;
+  sourceProjectName?: string;
+  sourcePanelIndex?: number;
 };
 
 export type StockMoveType = "in" | "out" | "adjust";
@@ -52,6 +58,13 @@ export type JobNeed = {
   panelsB: number;
   panels?: { specId: string; name: string; qty: number }[];
   hardware: { name: string; qty: number }[];
+  offcuts?: {
+    stockItemId: string;
+    name: string;
+    qty: number;
+    length: number;
+    width: number;
+  }[];
 };
 
 export type NeedLine = {
@@ -64,6 +77,7 @@ export type NeedLine = {
   specId?: string;
   familyName?: string;
   areaM2?: number;
+  kind?: "panel" | "offcut" | "hardware";
 };
 
 export type StockStatus = "ok" | "low" | "empty";
@@ -79,7 +93,7 @@ export type DeductionPlanLine = {
   afterPartial: number;
   gap: number;
   areaM2: number;
-  kind: "panel" | "hardware";
+  kind: "panel" | "offcut" | "hardware";
 };
 
 export type StockDeductionLine = {
@@ -208,6 +222,81 @@ export function jobNeedFromQuote(
   };
 }
 
+export function jobNeedFromStrategy(
+  strategy: StrategyResult,
+  hardware: HardwareItem[],
+  specLabels?: Record<string, string>,
+): JobNeed {
+  const base = jobNeedFromQuote(strategy.counts, hardware, specLabels);
+  return {
+    ...base,
+    offcuts: (strategy.offcutsUsed ?? []).map((o) => ({
+      stockItemId: o.stockItemId,
+      name: o.name,
+      qty: o.qty,
+      length: o.length,
+      width: o.width,
+    })),
+  };
+}
+
+export function emptyOffcutItem(input?: Partial<StockItem>): StockItem {
+  return {
+    id: input?.id ?? newId(),
+    kind: "offcut",
+    name: input?.name ?? "Chute",
+    sku: input?.sku ?? "",
+    qty: input?.qty ?? 1,
+    unit: "pièce",
+    unitCost: input?.unitCost ?? 0,
+    minQty: 0,
+    familyId: input?.familyId,
+    length: input?.length ?? 0,
+    width: input?.width ?? 0,
+    notes: input?.notes ?? "",
+    updatedAt: new Date().toISOString(),
+    usable: input?.usable !== false,
+    sourceProjectId: input?.sourceProjectId,
+    sourceProjectName: input?.sourceProjectName,
+    sourcePanelIndex: input?.sourcePanelIndex,
+    refId: input?.refId,
+  };
+}
+
+export function offcutBinsFromStock(
+  items: StockItem[],
+  exceptProjectId?: string | null,
+): OffcutBin[] {
+  const bins: OffcutBin[] = [];
+  for (const it of items) {
+    if (it.kind !== "offcut") continue;
+    if (it.usable === false) continue;
+    if (!(it.qty > 0)) continue;
+    if (!(it.length && it.length > 0 && it.width && it.width > 0)) continue;
+    if (exceptProjectId && it.sourceProjectId === exceptProjectId) continue;
+    bins.push({
+      id: it.id,
+      length: it.length,
+      width: it.width,
+      familyId: it.familyId ?? null,
+      familyName: null,
+      name: it.name,
+      qty: it.qty,
+    });
+  }
+  return bins;
+}
+
+export function nameOffcut(
+  projectName: string,
+  panelIndex: number,
+  length: number,
+  width: number,
+): string {
+  const proj = projectName.trim() || "Sans titre";
+  return `Chute ${proj} · P${panelIndex} · ${Math.round(length)}×${Math.round(width)}`;
+}
+
 export function coverage(
   items: StockItem[],
   need: JobNeed,
@@ -229,6 +318,7 @@ export function coverage(
       specId: "A",
       familyName: spec?.familyName ?? familyLabel(catalog, a?.familyId),
       areaM2: panelAreaM2(spec?.length ?? a?.length ?? 2500, spec?.width ?? a?.width ?? 400, need.panelsA),
+      kind: "panel",
     });
   }
   if (need.panelsB > 0 || b) {
@@ -243,6 +333,7 @@ export function coverage(
       specId: "B",
       familyName: spec?.familyName ?? familyLabel(catalog, b?.familyId),
       areaM2: panelAreaM2(spec?.length ?? b?.length ?? 2500, spec?.width ?? b?.width ?? 600, need.panelsB),
+      kind: "panel",
     });
   }
   for (const p of need.panels ?? []) {
@@ -259,6 +350,22 @@ export function coverage(
       specId: p.specId,
       familyName: spec?.familyName ?? familyLabel(catalog, found?.familyId),
       areaM2: panelAreaM2(spec?.length ?? found?.length ?? 0, spec?.width ?? found?.width ?? 0, p.qty),
+      kind: "panel",
+    });
+  }
+  for (const o of need.offcuts ?? []) {
+    const found = items.find((it) => it.id === o.stockItemId);
+    lines.push({
+      key: `offcut-${o.stockItemId}`,
+      itemId: found?.id ?? o.stockItemId,
+      name: o.name,
+      needed: o.qty,
+      onHand: found?.qty ?? 0,
+      gap: Math.max(0, o.qty - (found?.qty ?? 0)),
+      specId: `offcut:${o.stockItemId}`,
+      familyName: familyLabel(catalog, found?.familyId),
+      areaM2: panelAreaM2(o.length, o.width, o.qty),
+      kind: "offcut",
     });
   }
   for (const h of need.hardware) {
@@ -272,6 +379,7 @@ export function coverage(
       gap: Math.max(0, h.qty - (found?.qty ?? 0)),
       familyName: "",
       areaM2: 0,
+      kind: "hardware",
     });
   }
   return lines;
@@ -312,7 +420,7 @@ export function planDeduction(
       afterPartial: Math.max(0, l.onHand - Math.min(l.needed, l.onHand)),
       gap: l.gap,
       areaM2: l.areaM2 ?? 0,
-      kind: l.specId ? "panel" : "hardware",
+      kind: l.kind ?? (l.specId ? "panel" : "hardware"),
     }));
 }
 
@@ -466,7 +574,14 @@ export function restoreDeduction(
           id: line.itemId,
           name: line.name,
           qty: 0,
-          kind: line.specId === "A" ? "panel-A" : line.specId === "B" ? "panel-B" : "other",
+          kind:
+            line.specId === "A"
+              ? "panel-A"
+              : line.specId === "B"
+                ? "panel-B"
+                : line.specId?.startsWith("offcut:")
+                  ? "offcut"
+                  : "other",
           refId: line.specId,
         },
       ];
@@ -655,6 +770,7 @@ export function migrateStockItems(raw: unknown): StockItem[] {
     ...it,
     notes: it.notes ?? "",
     updatedAt: it.updatedAt ?? "",
+    usable: it.kind === "offcut" ? it.usable !== false : it.usable,
   }));
 }
 
