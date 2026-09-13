@@ -7,6 +7,8 @@ import {
   Layers,
   Hammer,
   Settings2,
+  Download,
+  Upload,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -17,6 +19,7 @@ import { ResultsPanel } from "@/components/results-panel";
 import { QuotePanel } from "@/components/quote-panel";
 import { QuoteDocument } from "@/components/quote-document";
 import { StockPanel } from "@/components/stock-panel";
+import { TerrainStock } from "@/components/terrain-stock";
 import { CatalogPanel } from "@/components/catalog-panel";
 import { ProjectsBar } from "@/components/projects-bar";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -100,8 +103,23 @@ import {
   formatDriveStatusLabel,
   type DriveBackupStatus,
 } from "@/lib/desktop";
+import {
+  applyJournal,
+  isPersistSnapshot,
+  movesFromJournal,
+  parseMovementJournal,
+  serializeMovementJournal,
+  type PendingMove,
+} from "@/lib/movements";
+import { isTerrainFlag, useTerrainMode } from "@/lib/terrain";
 
-export const Route = createFileRoute("/")({ component: Home });
+export const Route = createFileRoute("/")({
+  validateSearch: (search: Record<string, unknown>) => {
+    if (!isTerrainFlag(search.terrain)) return {};
+    return { terrain: 1 as const };
+  },
+  component: Home,
+});
 
 const DEFAULT_SETTINGS: AppSettings = {
   ...emptyQuoteIdentity(),
@@ -129,7 +147,9 @@ type DialogState =
   | { kind: "import-dup"; project: Project; catalog?: Catalog }
   | { kind: "clear-rows" }
   | { kind: "alert"; title: string; message: string }
-  | { kind: "stock-plan-offcuts" };
+  | { kind: "stock-plan-offcuts" }
+  | { kind: "apply-moves" }
+  | { kind: "import-persist"; saved: PersistedState };
 
 function parseRows(
   rows: PieceRow[],
@@ -203,6 +223,8 @@ function packIsValid(out: OptimizeOutput | null, selected: string): boolean {
 }
 
 function Home() {
+  const search = Route.useSearch();
+  const terrain = useTerrainMode(isTerrainFlag(search.terrain));
   const [rows, setRows] = useState<PieceRow[]>([INITIAL_EMPTY_ROW]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [result, setResult] = useState<OptimizeOutput | null>(null);
@@ -237,6 +259,7 @@ function Home() {
   } | null>(null);
   const [desktopApp, setDesktopApp] = useState(false);
   const [driveStatus, setDriveStatus] = useState<DriveBackupStatus | null>(null);
+  const [pendingMoves, setPendingMoves] = useState<PendingMove[]>([]);
 
   const liveFp = useMemo(
     () => fpOf({ rows, settings, selected, meta: projectMeta }),
@@ -296,6 +319,7 @@ function Home() {
     setCalculatedAt(named?.calculatedAt ?? saved.calculatedAt ?? null);
     setQuoteIssuedAt(named?.quoteIssuedAt ?? saved.quoteIssuedAt ?? null);
     setCurrentProjectId(saved.currentProjectId || newId());
+    setPendingMoves(saved.pendingMoves ?? []);
     setSavedFp(
       named
         ? fpOf({
@@ -381,6 +405,7 @@ function Home() {
         workshopPrefs,
         calculatedAt,
         quoteIssuedAt,
+        pendingMoves,
       });
     }, 280);
     return () => clearTimeout(t);
@@ -400,6 +425,7 @@ function Home() {
     workshopPrefs,
     calculatedAt,
     quoteIssuedAt,
+    pendingMoves,
   ]);
 
   useEffect(() => {
@@ -1017,6 +1043,57 @@ function Home() {
     openProject(named);
   }
 
+  function collectPersisted(): PersistedState {
+    return {
+      version: 5,
+      rows,
+      settings,
+      stock,
+      moves,
+      catalog,
+      projects,
+      currentProjectId,
+      projectMeta,
+      selectedStrategy: selected,
+      usedRefIds,
+      stockDeduction,
+      workshopPrefs,
+      calculatedAt,
+      quoteIssuedAt,
+      pendingMoves,
+    };
+  }
+
+  function applyPendingJournal() {
+    const { stock: next, applied, skipped } = applyJournal(stock, pendingMoves);
+    setStock(next);
+    setMoves(movesFromJournal(moves, stock, applied));
+    setPendingMoves([]);
+    const parts = [`${applied.length} mouvement${applied.length > 1 ? "s" : ""} appliqué${applied.length > 1 ? "s" : ""} au stock.`];
+    if (skipped.length > 0) {
+      parts.push(`${skipped.length} ignoré${skipped.length > 1 ? "s" : ""} (référence inconnue).`);
+    }
+    parts.push("Les projets n’ont pas été modifiés.");
+    setFlash(parts.join(" "));
+  }
+
+  async function handleExportWorkshop() {
+    const ok = await exportText(
+      "debit-bois-dernier.json",
+      JSON.stringify(collectPersisted(), null, 2),
+    );
+    if (ok) setFlash("Atelier exporté (JSON).");
+  }
+
+  async function handleExportMoves() {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const ok = await exportText(
+      `mouvements-${stamp}.json`,
+      serializeMovementJournal(pendingMoves),
+    );
+    if (ok) setFlash("Carnet de mouvements exporté.");
+  }
+
   async function handleExport() {
     const name = projectMeta.name.trim() || "projet-debit-bois";
     const existing = projects.find((p) => p.id === currentProjectId);
@@ -1031,6 +1108,38 @@ function Home() {
   async function handleImport() {
     const raw = await importText();
     if (raw == null) return;
+    let data: unknown;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      setDialog({
+        kind: "alert",
+        title: "Fichier invalide",
+        message: "Le fichier n’est pas un JSON valide.",
+      });
+      return;
+    }
+    const journal = parseMovementJournal(data);
+    if (journal.ok) {
+      setPendingMoves((prev) => [...prev, ...journal.journal.items]);
+      setFlash(
+        `${journal.journal.items.length} mouvement${journal.journal.items.length > 1 ? "s" : ""} ajouté${journal.journal.items.length > 1 ? "s" : ""} au carnet.`,
+      );
+      return;
+    }
+    if (isPersistSnapshot(data)) {
+      const saved = migrateState(data, {
+        settings: DEFAULT_SETTINGS,
+        emptyRow: INITIAL_EMPTY_ROW,
+      });
+      if (terrain) {
+        applyPersisted(saved, false);
+        setFlash("Atelier importé. Stock et plans du fichier.");
+        return;
+      }
+      setDialog({ kind: "import-persist", saved });
+      return;
+    }
     const parsed = parseImportedProject(raw);
     if (!parsed.ok) {
       setDialog({
@@ -1053,7 +1162,7 @@ function Home() {
   }
 
   const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
-  const stockWide = !catalogOpen && viewMode === "stock";
+  const stockWide = !terrain && !catalogOpen && viewMode === "stock";
   const shellWidth = stockWide ? "max-w-none" : "max-w-6xl";
   const jobStatus: JobStatusInput = {
     hasValidPack: packIsValid(result, selected),
@@ -1084,7 +1193,7 @@ function Home() {
               <p className="text-sm text-muted-foreground">
                 {projectMeta.name.trim() || "Sans titre"}
                 {dirty ? " •" : ""}
-                {" — poste d’atelier"}
+                {terrain ? " — terrain" : " — poste d’atelier"}
               </p>
               <div className="mt-1">
                 <JobStatusBadge info={jobStatus} />
@@ -1092,6 +1201,65 @@ function Home() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {terrain ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    void handleImport();
+                  }}
+                >
+                  <Upload />
+                  Importer JSON
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    void handleExportWorkshop();
+                  }}
+                >
+                  <Download />
+                  Exporter JSON
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    void handleExportMoves();
+                  }}
+                >
+                  <Download />
+                  Exporter mouvements
+                </Button>
+                <Button
+                  type="button"
+                  variant={viewMode === "stock" ? "default" : "outline"}
+                  onClick={() => setViewMode("stock")}
+                >
+                  <Package />
+                  Stock
+                </Button>
+                <Button
+                  type="button"
+                  variant={viewMode === "atelier" ? "default" : "outline"}
+                  onClick={() => setViewMode("atelier")}
+                >
+                  <Layers />
+                  Plans
+                </Button>
+                <Button
+                  type="button"
+                  variant={viewMode === "devis" ? "default" : "outline"}
+                  onClick={() => setViewMode("devis")}
+                >
+                  <FileText />
+                  Devis
+                </Button>
+              </>
+            ) : (
+              <>
             <Button
               type="button"
               variant={!catalogOpen && viewMode === "atelier" ? "default" : "outline"}
@@ -1153,6 +1321,8 @@ function Home() {
                 PDF client
               </Button>
             )}
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -1178,7 +1348,75 @@ function Home() {
           </div>
         )}
 
-        {catalogOpen && (
+        {!terrain && pendingMoves.length > 0 && (
+          <div className="no-print flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm">
+            <p>
+              {pendingMoves.length} mouvement{pendingMoves.length > 1 ? "s" : ""}{" "}
+              en attente — le stock atelier n’a pas encore bougé. Les projets
+              restent intacts.
+            </p>
+            <Button
+              type="button"
+              onClick={() => setDialog({ kind: "apply-moves" })}
+            >
+              {pendingMoves.length} mouvement{pendingMoves.length > 1 ? "s" : ""} — Appliquer
+            </Button>
+          </div>
+        )}
+
+        {terrain && (
+          <>
+            {viewMode === "stock" && (
+              <TerrainStock
+                items={stock}
+                catalog={catalog}
+                pending={pendingMoves}
+                onPending={setPendingMoves}
+              />
+            )}
+            {viewMode === "atelier" && (
+              result && current ? (
+                <AtelierSheet
+                  projectName={projectMeta.name}
+                  clientName={projectMeta.clientName || settings.clientName}
+                  rows={rows}
+                  strategy={current}
+                  kerf={settings.kerf}
+                  wastePct={settings.wastePct}
+                  planWastePct={tauPlan}
+                  onWastePct={() => {}}
+                  onResetWaste={() => {}}
+                  supplier={liveSupplier}
+                  hardware={settings.hardwareItems}
+                  onPrint={() => printSheet("atelier")}
+                  readOnly
+                />
+              ) : (
+                <p className="rounded-xl bg-card px-5 py-8 text-center text-sm text-muted-foreground shadow-[var(--shadow-border)]">
+                  Importez le JSON du PC pour afficher les plans du projet chargé.
+                </p>
+              )
+            )}
+            {viewMode === "devis" && (
+              result && current ? (
+                <QuoteDocument
+                  settings={settings}
+                  onChange={() => {}}
+                  selling={selling}
+                  strategy={current}
+                  supplier={liveSupplier}
+                  readOnly
+                />
+              ) : (
+                <p className="rounded-xl bg-card px-5 py-8 text-center text-sm text-muted-foreground shadow-[var(--shadow-border)]">
+                  Importez le JSON du PC pour afficher le devis du projet chargé.
+                </p>
+              )
+            )}
+          </>
+        )}
+
+        {!terrain && catalogOpen && (
           <CatalogPanel
             catalog={catalog}
             usedRefIds={blockedRefIds}
@@ -1191,7 +1429,7 @@ function Home() {
           />
         )}
 
-        {!catalogOpen && viewMode === "stock" && (
+        {!terrain && !catalogOpen && viewMode === "stock" && (
           <StockPanel
             items={stock}
             moves={moves}
@@ -1203,7 +1441,7 @@ function Home() {
           />
         )}
 
-        {!catalogOpen && viewMode === "atelier" && (
+        {!terrain && !catalogOpen && viewMode === "atelier" && (
           <>
             <ProjectsBar
               meta={projectMeta}
@@ -1477,7 +1715,7 @@ function Home() {
           </>
         )}
 
-        {!catalogOpen && viewMode === "devis" && (
+        {!terrain && !catalogOpen && viewMode === "devis" && (
           <>
             <p className="no-print text-sm text-muted-foreground">
               Projet {projectMeta.name.trim() || "Sans titre"}
@@ -1536,8 +1774,9 @@ function Home() {
           shellWidth,
         )}
       >
-        Unités en millimètres. Atelier, stock et devis. Catalogue à part. Le projet
-        est un fichier : enregistrez pour le conserver.
+        {terrain
+          ? "Mode terrain. Importez le JSON du PC, saisissez les mouvements, renvoyez le carnet. Le stock atelier se met à jour sur l’ordinateur."
+          : "Unités en millimètres. Atelier, stock et devis. Catalogue à part. Le projet est un fichier : enregistrez pour le conserver."}
         {desktopApp && (
           <>
             {" · "}
@@ -1778,6 +2017,48 @@ function Home() {
             label: "Mettre en stock",
             onClick: () => {
               stockAllPlanOffcuts();
+              setDialog({ kind: "none" });
+            },
+          },
+        ]}
+      />
+
+      <ConfirmDialog
+        open={dialog.kind === "apply-moves"}
+        title="Appliquer le carnet Terrain"
+        message={`${pendingMoves.length} mouvement${pendingMoves.length > 1 ? "s" : ""} seront rejoués sur le stock atelier. Les projets ne seront pas modifiés.`}
+        actions={[
+          {
+            label: "Annuler",
+            variant: "ghost",
+            onClick: () => setDialog({ kind: "none" }),
+          },
+          {
+            label: "Appliquer",
+            onClick: () => {
+              applyPendingJournal();
+              setDialog({ kind: "none" });
+            },
+          },
+        ]}
+      />
+
+      <ConfirmDialog
+        open={dialog.kind === "import-persist"}
+        title="Importer un atelier"
+        message="Remplacer l’état local (catalogue, stocks et projets) par ce fichier ?"
+        actions={[
+          {
+            label: "Annuler",
+            variant: "ghost",
+            onClick: () => setDialog({ kind: "none" }),
+          },
+          {
+            label: "Remplacer",
+            onClick: () => {
+              if (dialog.kind !== "import-persist") return;
+              applyPersisted(dialog.saved, false);
+              setFlash("Atelier importé.");
               setDialog({ kind: "none" });
             },
           },

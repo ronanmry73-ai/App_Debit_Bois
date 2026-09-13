@@ -28,6 +28,7 @@ type Props = {
   planActions?: PlanActions;
   onExportCsv?: () => void;
   onExportDxf?: () => void;
+  readOnly?: boolean;
 };
 
 function areaLabel(n: number): string {
@@ -50,6 +51,7 @@ export function AtelierSheet({
   planActions,
   onExportCsv,
   onExportDxf,
+  readOnly = false,
 }: Props) {
   const pieces = rows.filter(
     (r) =>
@@ -276,10 +278,11 @@ export function AtelierSheet({
           <CuttingPlanList
             panels={strategy.panels}
             kerf={kerf}
-            actions={planActions}
+            actions={readOnly ? { interactive: false } : planActions}
           />
         </div>
 
+        {!readOnly && (
         <div className="mt-5 no-print rounded-lg bg-muted/70 px-4 py-3">
           <Label htmlFor="atelier-waste">Taux de perte (jugement)</Label>
           <div className="mt-1.5 flex flex-wrap items-end gap-3">
@@ -308,12 +311,14 @@ export function AtelierSheet({
             les chutes en stock — elles ne sont pas créées automatiquement.
           </p>
         </div>
+        )}
         <p className="mt-3 print-only text-sm">
           Taux de perte retenu : {formatPct(wastePct)}
           {wastePct === tauPlan ? " (chute du plan)" : ""}
         </p>
       </article>
 
+      {!readOnly && (
       <div className="no-print flex flex-wrap justify-end gap-2">
         {onExportCsv && (
           <Button type="button" variant="outline" onClick={onExportCsv}>
@@ -332,6 +337,7 @@ export function AtelierSheet({
           Fiche atelier / PDF
         </Button>
       </div>
+      )}
     </section>
   );
 }

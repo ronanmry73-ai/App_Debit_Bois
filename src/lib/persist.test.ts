@@ -54,6 +54,7 @@ test("état vide ne crée pas de projet démo", () => {
   assert.equal(migrated.catalog.refs.length, 2);
   assert.equal(migrated.stockDeduction, null);
   assert.equal(migrated.workshopPrefs.companyName, "");
+  assert.equal(migrated.pendingMoves.length, 0);
 });
 
 test("v5 conserve prix catalogue, stock atelier global et déduction", () => {
@@ -180,4 +181,20 @@ test("identité démo n’est pas copiée dans les préférences atelier", () =>
   const migrated = migrateState({ settings: d.settings }, d);
   assert.equal(migrated.workshopPrefs.companyName, "");
   assert.equal(migrated.workshopPrefs.companyAddress, "");
+  assert.equal(migrated.pendingMoves.length, 0);
+});
+
+test("v5 conserve le carnet pendingMoves", () => {
+  const migrated = migrateState(
+    {
+      version: 5,
+      pendingMoves: [
+        { id: "m1", at: "2026-09-13T10:00:00.000Z", refId: "A", delta: 5, reason: "Réception" },
+      ],
+    },
+    defaults(),
+  );
+  assert.equal(migrated.pendingMoves.length, 1);
+  assert.equal(migrated.pendingMoves[0]?.refId, "A");
+  assert.equal(migrated.pendingMoves[0]?.delta, 5);
 });

@@ -16,7 +16,7 @@ Ouvre l’adresse indiquée par Vite (souvent `http://localhost:8080`).
 Autres commandes :
 
 ```bash
-npm run build       # production (sortie Vercel / Nitro)
+npm run build       # production + dossier dist/ (Cloudflare Pages)
 npm run typecheck
 npm run desktop     # fenêtre native Electron
 ```
@@ -28,6 +28,19 @@ Voir [DESKTOP.md](DESKTOP.md) pour :
 1. Installer comme PWA depuis Chrome / Edge
 2. Lancer une fenêtre Electron (`npm run desktop`)
 3. Produire un installateur `.exe` / `.dmg` / AppImage (`npm run desktop:dist`)
+
+## Déployer sur Cloudflare Pages
+
+Le PC Electron reste la source de vérité. Le téléphone ouvre le **même** build web, en PWA (mode Terrain).
+
+Réglages (aussi dans `wrangler.toml`) :
+
+| | |
+|---|---|
+| Commande de build | `npm run build` |
+| Dossier de sortie | `dist` |
+
+Aucune variable d’environnement. Sur le téléphone : installer l’app, importer `debit-bois-dernier.json`, saisir Entrée/Sortie, exporter `mouvements-*.json`, l’appliquer sur le PC.
 
 ## Déployer sur Vercel
 

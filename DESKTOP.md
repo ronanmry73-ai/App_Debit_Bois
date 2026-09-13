@@ -69,6 +69,7 @@ Tout reste **local**, hors ligne, sans compte.
 | Navigateur / PWA | `localStorage`, clé `debit-bois-v5` (migration auto depuis `debit-bois-v4`) |
 | Electron | Fichier `debit-bois-store.json` dans le dossier **userData** de l’application, *et* `localStorage` en miroir |
 | Copie Drive (Windows) | Miroir **après** l’écriture locale, jamais lu au démarrage : `H:\Mon Drive\Sauvegarde Débit Bois ERP\debit-bois-dernier.json` + `historique\` (30 instantanés, au plus un toutes les 10 min). Si H: est absent, l’app continue en local. |
+| Téléphone (PWA) | Même build web (Cloudflare Pages). Mode Terrain si écran < 768 px ou `?terrain=1`. Pont : JSON atelier + carnet `mouvements-*.json` appliqué sur le PC. |
 
 Sur Windows, le fichier Electron se trouve typiquement dans :
 

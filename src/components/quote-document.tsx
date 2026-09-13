@@ -21,6 +21,7 @@ type Props = {
   strategy: StrategyResult;
   supplier: SupplierCost | null;
   onPrint?: () => void;
+  readOnly?: boolean;
 };
 
 export function QuoteDocument({
@@ -30,6 +31,7 @@ export function QuoteDocument({
   strategy,
   supplier,
   onPrint,
+  readOnly = false,
 }: Props) {
   const hw = hardwareLines(settings.hardwareItems).filter(
     (l) => l.name.trim() && l.qty > 0,
@@ -43,7 +45,7 @@ export function QuoteDocument({
 
   return (
     <section aria-labelledby="quote-sheet-title">
-      <IdentityForm settings={settings} onChange={onChange} />
+      {!readOnly && <IdentityForm settings={settings} onChange={onChange} />}
 
       <article
         id="quote-sheet"
@@ -262,12 +264,14 @@ export function QuoteDocument({
         </footer>
       </article>
 
+      {!readOnly && (
       <div className="no-print mt-3 flex justify-end">
         <Button type="button" onClick={() => (onPrint ? onPrint() : window.print())}>
           <Printer />
           PDF client
         </Button>
       </div>
+      )}
     </section>
   );
 }
