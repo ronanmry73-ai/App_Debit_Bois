@@ -20,7 +20,7 @@ import {
   type StockMove,
 } from "./stock.ts";
 import type { AppSettings, PieceRow } from "./types.ts";
-import { parsePendingMoves, type PendingMove } from "./movements.ts";
+import { parseAppliedMoveIds, parsePendingMoves, type PendingMove } from "./movements.ts";
 
 export const STORAGE_KEY = "debit-bois-v5";
 export const LEGACY_STORAGE_KEY = "debit-bois-v4";
@@ -49,6 +49,7 @@ export type PersistedState = {
   calculatedAt: string | null;
   quoteIssuedAt: string | null;
   pendingMoves: PendingMove[];
+  appliedMoveIds: string[];
 };
 
 export function emptyMeta(): ProjectMeta {
@@ -93,6 +94,7 @@ export function migrateState(
     calculatedAt: null,
     quoteIssuedAt: null,
     pendingMoves: [],
+    appliedMoveIds: [],
   };
   if (!raw || typeof raw !== "object") return base;
   const o = raw as Record<string, unknown>;
@@ -160,6 +162,7 @@ export function migrateState(
       ? o.quoteIssuedAt
       : named?.quoteIssuedAt ?? null;
   const pendingMoves = parsePendingMoves(o.pendingMoves);
+  const appliedMoveIds = parseAppliedMoveIds(o.appliedMoveIds);
 
   return {
     version: 5,
@@ -179,6 +182,7 @@ export function migrateState(
     calculatedAt,
     quoteIssuedAt,
     pendingMoves,
+    appliedMoveIds,
   };
 }
 

@@ -7,9 +7,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DEFAULT_DRIVE_BACKUP_DIR,
+  archivePendingJournalFile,
   driveLocationAvailable,
   lastKnownBackupDir,
   mirrorToDrive,
+  readPendingJournalFile,
   resolveBackupDir,
 } from "./drive-backup.mjs";
 
@@ -175,6 +177,16 @@ async function createWindow(url) {
     return { action: "deny" };
   });
   await mainWindow.loadURL(url);
+  mainWindow.on("focus", () => {
+    try {
+      mainWindow?.webContents.send("debit-bois:pending-journal-check");
+    } catch {}
+  });
+  mainWindow.webContents.on("did-finish-load", () => {
+    try {
+      mainWindow?.webContents.send("debit-bois:pending-journal-check");
+    } catch {}
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -268,6 +280,22 @@ function registerStoreIpc() {
   });
   ipcMain.handle("debit-bois:get-drive-status", () => probeDriveStatus());
   ipcMain.handle("debit-bois:restore-drive-backup", async () => restoreDriveBackup());
+  ipcMain.handle("debit-bois:read-pending-journal", async (_event, hintJson) => {
+    const dir = resolveBackupDir(
+      typeof hintJson === "string" && hintJson.trim()
+        ? hintJson
+        : lastKnownBackupDir(),
+    );
+    return readPendingJournalFile(dir);
+  });
+  ipcMain.handle("debit-bois:archive-pending-journal", async (_event, hintJson) => {
+    const dir = resolveBackupDir(
+      typeof hintJson === "string" && hintJson.trim()
+        ? hintJson
+        : lastKnownBackupDir(),
+    );
+    return archivePendingJournalFile({ dir });
+  });
   ipcMain.handle("debit-bois:export-file", async (_event, suggestedName, content) => {
     const win = BrowserWindow.getFocusedWindow() || mainWindow;
     const defaultName = typeof suggestedName === "string" && suggestedName.trim() ? suggestedName.trim() : "projet-debit-bois.json";

@@ -5,6 +5,21 @@ export type DriveBackupStatus = {
   error?: string | null;
 };
 
+export type PendingJournalRead = {
+  ok: boolean;
+  raw: string | null;
+  missing?: boolean;
+  path?: string;
+  error?: string | null;
+};
+
+export type PendingJournalArchive = {
+  ok: boolean;
+  path?: string;
+  archived?: string | null;
+  error?: string | null;
+};
+
 export type DebitBoisDesktop = {
   isDesktop: boolean;
   platform?: string;
@@ -15,8 +30,11 @@ export type DebitBoisDesktop = {
   setTitle?: (title: string) => Promise<boolean>;
   getDriveStatus?: () => Promise<DriveBackupStatus | null>;
   restoreDriveBackup?: () => Promise<{ restored: boolean }>;
+  readPendingJournal?: (hintJson?: string) => Promise<PendingJournalRead | null>;
+  archivePendingJournal?: (hintJson?: string) => Promise<PendingJournalArchive | null>;
   onDriveStatus?: (cb: (status: DriveBackupStatus) => void) => () => void;
   onStoreRestored?: (cb: (json: string) => void) => () => void;
+  onPendingJournalCheck?: (cb: () => void) => () => void;
 };
 
 export function desktopApi(): DebitBoisDesktop | null {

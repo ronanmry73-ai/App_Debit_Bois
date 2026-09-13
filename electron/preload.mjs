@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld("debitBoisDesktop", {
   setTitle: (title) => ipcRenderer.invoke("debit-bois:set-title", title),
   getDriveStatus: () => ipcRenderer.invoke("debit-bois:get-drive-status"),
   restoreDriveBackup: () => ipcRenderer.invoke("debit-bois:restore-drive-backup"),
+  readPendingJournal: (hintJson) =>
+    ipcRenderer.invoke("debit-bois:read-pending-journal", hintJson),
+  archivePendingJournal: (hintJson) =>
+    ipcRenderer.invoke("debit-bois:archive-pending-journal", hintJson),
   onDriveStatus: (cb) => {
     if (typeof cb !== "function") return () => {};
     const wrapped = (_event, status) => cb(status);
@@ -22,5 +26,12 @@ contextBridge.exposeInMainWorld("debitBoisDesktop", {
     const wrapped = (_event, json) => cb(json);
     ipcRenderer.on("debit-bois:store-restored", wrapped);
     return () => ipcRenderer.removeListener("debit-bois:store-restored", wrapped);
+  },
+  onPendingJournalCheck: (cb) => {
+    if (typeof cb !== "function") return () => {};
+    const wrapped = () => cb();
+    ipcRenderer.on("debit-bois:pending-journal-check", wrapped);
+    return () =>
+      ipcRenderer.removeListener("debit-bois:pending-journal-check", wrapped);
   },
 });

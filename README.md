@@ -40,7 +40,7 @@ Réglages (aussi dans `wrangler.toml`) :
 | Commande de build | `npm run build` |
 | Dossier de sortie | `dist` |
 
-Aucune variable d’environnement. Sur le téléphone : installer l’app, importer `debit-bois-dernier.json`, saisir Entrée/Sortie, exporter `mouvements-*.json`. Sur le PC : **Importer le carnet** (Projets) puis **Appliquer**.
+Aucune variable d’environnement. Sur le téléphone : installer l’app, importer `debit-bois-dernier.json`, saisir Entrée/Sortie, **Envoyer le carnet** (`mouvements-pending.json` dans le dossier Drive). Sur le PC : le bandeau **Appliquer** apparaît au focus, ou **Importer le carnet** à la main.
 
 ## Déployer sur Vercel
 

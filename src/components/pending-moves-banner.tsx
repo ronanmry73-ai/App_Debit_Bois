@@ -5,6 +5,7 @@ import type { StockItem } from "@/lib/stock";
 type Props = {
   items: PendingMove[];
   stock: StockItem[];
+  drive?: boolean;
   onApply: () => void;
 };
 
@@ -20,16 +21,17 @@ function formatAt(iso: string): string {
   });
 }
 
-export function PendingMovesBanner({ items, stock, onApply }: Props) {
+export function PendingMovesBanner({ items, stock, drive, onApply }: Props) {
   const n = items.length;
   if (n === 0) return null;
   const preview = items.slice(0, 8);
+  const label = drive
+    ? `${n} mouvement${n > 1 ? "s" : ""} Drive — Appliquer`
+    : `${n} mouvement${n > 1 ? "s" : ""} Terrain en attente — Appliquer`;
   return (
     <div className="no-print rounded-xl border border-border bg-card px-4 py-3 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="font-medium">
-          {n} mouvement{n > 1 ? "s" : ""} Terrain en attente — Appliquer
-        </p>
+        <p className="font-medium">{label}</p>
         <Button type="button" onClick={onApply}>
           {n} mouvement{n > 1 ? "s" : ""} — Appliquer
         </Button>

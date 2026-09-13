@@ -107,10 +107,14 @@ import {
 import {
   applyJournal,
   classifyBridgeFile,
+  filterUnapplied,
   isPersistSnapshot,
+  mergeAppliedIds,
   mergePendingMoves,
   movesFromJournal,
   parseMovementJournal,
+  PENDING_JOURNAL_HINT,
+  PENDING_JOURNAL_NAME,
   PERSIST_AS_JOURNAL_MSG,
   serializeMovementJournal,
   type PendingMove,
@@ -264,6 +268,9 @@ function Home() {
   const [desktopApp, setDesktopApp] = useState(false);
   const [driveStatus, setDriveStatus] = useState<DriveBackupStatus | null>(null);
   const [pendingMoves, setPendingMoves] = useState<PendingMove[]>([]);
+  const [appliedMoveIds, setAppliedMoveIds] = useState<string[]>([]);
+  const [driveOrigin, setDriveOrigin] = useState(false);
+  const appliedIdsRef = useRef<string[]>([]);
 
   const liveFp = useMemo(
     () => fpOf({ rows, settings, selected, meta: projectMeta }),
@@ -324,6 +331,8 @@ function Home() {
     setQuoteIssuedAt(named?.quoteIssuedAt ?? saved.quoteIssuedAt ?? null);
     setCurrentProjectId(saved.currentProjectId || newId());
     setPendingMoves(saved.pendingMoves ?? []);
+    setAppliedMoveIds(saved.appliedMoveIds ?? []);
+    appliedIdsRef.current = saved.appliedMoveIds ?? [];
     setSavedFp(
       named
         ? fpOf({
@@ -391,6 +400,52 @@ function Home() {
   }, []);
 
   useEffect(() => {
+    appliedIdsRef.current = appliedMoveIds;
+  }, [appliedMoveIds]);
+
+  const prefsRef = useRef(workshopPrefs);
+  prefsRef.current = workshopPrefs;
+
+  useEffect(() => {
+    if (!hydrated || terrain) return;
+    const api = desktopApi();
+    if (!api?.readPendingJournal) return;
+    let cancelled = false;
+    const hint = () => JSON.stringify({ workshopPrefs: prefsRef.current });
+    const ingest = async () => {
+      try {
+        const res = await api.readPendingJournal?.(hint());
+        if (cancelled || !res?.ok || !res.raw) return;
+        const parsed = parseMovementJournal(res.raw);
+        if (!parsed.ok) return;
+        const fresh = filterUnapplied(parsed.journal.items, appliedIdsRef.current);
+        if (fresh.length === 0) return;
+        setPendingMoves((prev) =>
+          mergePendingMoves(filterUnapplied(prev, appliedIdsRef.current), fresh),
+        );
+        setDriveOrigin(true);
+      } catch {
+        /* Drive absent : on reste en local */
+      }
+    };
+    void ingest();
+    const interval = window.setInterval(() => {
+      void ingest();
+    }, 120_000);
+    const onFocus = () => {
+      void ingest();
+    };
+    window.addEventListener("focus", onFocus);
+    const offCheck = api.onPendingJournalCheck?.(onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      offCheck?.();
+    };
+  }, [hydrated, terrain]);
+
+  useEffect(() => {
     if (!hydrated) return;
     const t = setTimeout(() => {
       void savePersisted({
@@ -410,6 +465,7 @@ function Home() {
         calculatedAt,
         quoteIssuedAt,
         pendingMoves,
+        appliedMoveIds,
       });
     }, 280);
     return () => clearTimeout(t);
@@ -430,6 +486,7 @@ function Home() {
     calculatedAt,
     quoteIssuedAt,
     pendingMoves,
+    appliedMoveIds,
   ]);
 
   useEffect(() => {
@@ -1065,21 +1122,35 @@ function Home() {
       calculatedAt,
       quoteIssuedAt,
       pendingMoves,
+      appliedMoveIds,
     };
   }
 
   function applyPendingJournal() {
-    const { stock: next, applied, skipped } = applyJournal(stock, pendingMoves);
+    const queue = filterUnapplied(pendingMoves, appliedMoveIds);
+    const { stock: next, applied, skipped } = applyJournal(stock, queue);
     const nextMoves = movesFromJournal(moves, stock, applied);
+    const nextIds = mergeAppliedIds(
+      appliedMoveIds,
+      queue.map((m) => m.id),
+    );
     setStock(next);
     setMoves(nextMoves);
     setPendingMoves([]);
+    setAppliedMoveIds(nextIds);
+    appliedIdsRef.current = nextIds;
+    setDriveOrigin(false);
     void savePersisted({
       ...collectPersisted(),
       stock: next,
       moves: nextMoves,
       pendingMoves: [],
+      appliedMoveIds: nextIds,
     });
+    const api = desktopApi();
+    if (api?.archivePendingJournal) {
+      void api.archivePendingJournal(JSON.stringify({ workshopPrefs })).catch(() => {});
+    }
     const parts = [`${applied.length} mouvement${applied.length > 1 ? "s" : ""} appliqué${applied.length > 1 ? "s" : ""} au stock.`];
     if (skipped.length > 0) {
       parts.push(`${skipped.length} ignoré${skipped.length > 1 ? "s" : ""} (référence inconnue).`);
@@ -1097,12 +1168,21 @@ function Home() {
   }
 
   async function handleExportMoves() {
-    const stamp = new Date().toISOString().slice(0, 10);
+    if (pendingMoves.length === 0) {
+      setFlash("Aucun mouvement à envoyer.");
+      return;
+    }
     const ok = await exportText(
-      `mouvements-${stamp}.json`,
+      PENDING_JOURNAL_NAME,
       serializeMovementJournal(pendingMoves),
     );
-    if (ok) setFlash("Carnet de mouvements exporté.");
+    if (!ok) return;
+    setPendingMoves([]);
+    void savePersisted({
+      ...collectPersisted(),
+      pendingMoves: [],
+    });
+    setFlash(`Carnet envoyé (${PENDING_JOURNAL_NAME}). ${PENDING_JOURNAL_HINT}`);
   }
 
   async function handleExport() {
@@ -1132,9 +1212,16 @@ function Home() {
     }
     const journal = parseMovementJournal(data);
     if (journal.ok) {
-      setPendingMoves((prev) => [...prev, ...journal.journal.items]);
+      const items = filterUnapplied(journal.journal.items, appliedMoveIds);
+      if (items.length === 0) {
+        setFlash("Ces mouvements ont déjà été appliqués (ou le carnet est vide).");
+        return;
+      }
+      setPendingMoves((prev) =>
+        mergePendingMoves(filterUnapplied(prev, appliedMoveIds), items),
+      );
       setFlash(
-        `${journal.journal.items.length} mouvement${journal.journal.items.length > 1 ? "s" : ""} ajouté${journal.journal.items.length > 1 ? "s" : ""} au carnet.`,
+        `${items.length} mouvement${items.length > 1 ? "s" : ""} ajouté${items.length > 1 ? "s" : ""} au carnet.`,
       );
       return;
     }
@@ -1203,18 +1290,21 @@ function Home() {
       });
       return;
     }
-    const items = classified.journal.items;
+    const items = filterUnapplied(classified.journal.items, appliedMoveIds);
     if (items.length === 0) {
-      setFlash("Carnet vide — aucun mouvement à appliquer.");
+      setFlash("Ces mouvements ont déjà été appliqués (ou le carnet est vide).");
       return;
     }
-    setPendingMoves((prev) => mergePendingMoves(prev, items));
+    setPendingMoves((prev) =>
+      mergePendingMoves(filterUnapplied(prev, appliedMoveIds), items),
+    );
     setFlash(
       `${items.length} mouvement${items.length > 1 ? "s" : ""} Terrain en attente — Appliquer`,
     );
   }
 
   const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
+  const pendingToApply = filterUnapplied(pendingMoves, appliedMoveIds);
   const stockWide = !terrain && !catalogOpen && viewMode === "stock";
   const shellWidth = stockWide ? "max-w-none" : "max-w-6xl";
   const jobStatus: JobStatusInput = {
@@ -1284,7 +1374,7 @@ function Home() {
                   }}
                 >
                   <Download />
-                  Exporter mouvements
+                  Envoyer le carnet
                 </Button>
                 <Button
                   type="button"
@@ -1378,6 +1468,16 @@ function Home() {
             )}
           </div>
         </div>
+        {terrain ? (
+          <p
+            className={cn(
+              "mx-auto w-full px-4 pb-3 text-xs text-muted-foreground sm:px-6",
+              shellWidth,
+            )}
+          >
+            {PENDING_JOURNAL_HINT}
+          </p>
+        ) : null}
       </header>
 
       <main
@@ -1386,10 +1486,11 @@ function Home() {
           shellWidth,
         )}
       >
-        {!terrain && pendingMoves.length > 0 && (
+        {!terrain && pendingToApply.length > 0 && (
           <PendingMovesBanner
-            items={pendingMoves}
+            items={pendingToApply}
             stock={stock}
+            drive={driveOrigin}
             onApply={() => setDialog({ kind: "apply-moves" })}
           />
         )}
@@ -1823,7 +1924,7 @@ function Home() {
         )}
       >
         {terrain
-          ? "Mode terrain. Importez le JSON du PC, saisissez les mouvements, renvoyez le carnet. Le stock atelier se met à jour sur l’ordinateur."
+          ? "Mode terrain. Importez le JSON du PC, saisissez les mouvements, envoyez mouvements-pending.json dans le dossier Drive. Le stock atelier se met à jour sur l’ordinateur."
           : "Unités en millimètres. Atelier, stock et devis. Catalogue à part. Le projet est un fichier : enregistrez pour le conserver."}
         {desktopApp && (
           <>
@@ -2073,8 +2174,8 @@ function Home() {
 
       <ConfirmDialog
         open={dialog.kind === "apply-moves"}
-        title="Appliquer le carnet Terrain"
-        message={`${pendingMoves.length} mouvement${pendingMoves.length > 1 ? "s" : ""} seront rejoués sur le stock atelier. Les projets ne seront pas modifiés.`}
+        title={driveOrigin ? "Appliquer le carnet Drive" : "Appliquer le carnet Terrain"}
+        message={`${pendingToApply.length} mouvement${pendingToApply.length > 1 ? "s" : ""} seront rejoués sur le stock atelier. Les projets ne seront pas modifiés.`}
         actions={[
           {
             label: "Annuler",

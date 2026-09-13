@@ -61,13 +61,14 @@ export function TerrainStock({ items, catalog, pending, onPending }: Props) {
             Stock chantier
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Entrée et sortie restent dans le carnet. Le PC appliquera les
-            quantités ; ici le stock importé ne bouge pas.
+            Entrée et sortie restent dans le carnet. Envoyez
+            mouvements-pending.json dans le dossier Drive ; le PC appliquera
+            les quantités. Ici le stock importé ne bouge pas.
           </p>
           {pending.length > 0 && (
             <p className="mt-3 rounded-lg bg-accent px-3 py-2 text-sm text-accent-foreground">
               {pending.length} mouvement{pending.length > 1 ? "s" : ""} en attente
-              — exportez le carnet vers le PC.
+              — Envoyer le carnet (mouvements-pending.json).
             </p>
           )}
           {message && <p className="mt-3 text-sm">{message}</p>}

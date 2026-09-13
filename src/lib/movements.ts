@@ -31,6 +31,13 @@ export type MovementJournal = {
 export const PERSIST_AS_JOURNAL_MSG =
   "Ce fichier est une sauvegarde complète — utilise Importer.";
 
+export const PENDING_JOURNAL_NAME = "mouvements-pending.json";
+
+export const PENDING_JOURNAL_HINT =
+  "Enregistre ce fichier dans le dossier Sauvegarde Débit Bois ERP, en remplacement de mouvements-pending.json. Ne l’écrase pas tant que l’atelier n’a pas appliqué le précédent.";
+
+export const APPLIED_IDS_KEEP = 500;
+
 export function stockRefKey(item: Pick<StockItem, "id" | "refId">): string {
   const ref = typeof item.refId === "string" ? item.refId.trim() : "";
   return ref || item.id;
@@ -187,6 +194,36 @@ export function mergePendingMoves(
   const seen = new Set(current.map((m) => m.id));
   const extra = incoming.filter((m) => !seen.has(m.id));
   return extra.length === 0 ? current : [...current, ...extra];
+}
+
+export function parseAppliedMoveIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of raw) {
+    if (typeof id !== "string") continue;
+    const key = id.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out.length > APPLIED_IDS_KEEP ? out.slice(-APPLIED_IDS_KEEP) : out;
+}
+
+export function filterUnapplied(
+  items: PendingMove[],
+  appliedIds: readonly string[],
+): PendingMove[] {
+  if (items.length === 0) return items;
+  const seen = new Set(appliedIds);
+  return items.filter((m) => !seen.has(m.id));
+}
+
+export function mergeAppliedIds(
+  current: readonly string[],
+  ids: readonly string[],
+): string[] {
+  return parseAppliedMoveIds([...current, ...ids]);
 }
 
 export function applyJournal(

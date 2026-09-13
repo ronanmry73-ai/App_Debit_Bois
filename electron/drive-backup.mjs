@@ -4,12 +4,13 @@
  */
 
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const DEFAULT_DRIVE_BACKUP_DIR =
   "H:\\Mon Drive\\Sauvegarde Débit Bois ERP";
 export const MIRROR_NAME = "debit-bois-dernier.json";
+export const PENDING_JOURNAL_NAME = "mouvements-pending.json";
 export const HISTORY_DIR_NAME = "historique";
 export const HISTORY_KEEP = 30;
 export const SNAPSHOT_MIN_MS = 10 * 60 * 1000;
@@ -205,3 +206,81 @@ export function formatDriveStatusLabel(status) {
   if (status.ok) return "Sauvegarde Drive : prête";
   return "Drive indisponible — données locales OK";
 }
+
+export function emptyPendingJournalJson(now = new Date()) {
+  return JSON.stringify(
+    { version: 1, createdAt: now.toISOString(), items: [] },
+    null,
+    2,
+  );
+}
+
+/**
+ * Lecture seule du carnet téléphone. Ne touche jamais debit-bois-dernier.json.
+ * @param {string} [dir]
+ */
+export async function readPendingJournalFile(dir = lastKnownBackupDir()) {
+  const folder = dir || DEFAULT_DRIVE_BACKUP_DIR;
+  const file = path.join(folder, PENDING_JOURNAL_NAME);
+  if (!driveLocationAvailable(folder)) {
+    return { ok: false, raw: null, missing: true, path: file, error: "Drive indisponible" };
+  }
+  if (!existsSync(file)) {
+    return { ok: true, raw: null, missing: true, path: file, error: null };
+  }
+  try {
+    const raw = await readFile(file, "utf8");
+    return { ok: true, raw, missing: false, path: file, error: null };
+  } catch (err) {
+    const message =
+      err && typeof err === "object" && "message" in err
+        ? String(err.message)
+        : String(err);
+    console.warn("[Débit Bois] Lecture carnet Drive impossible :", message);
+    return { ok: false, raw: null, missing: false, path: file, error: "Drive indisponible" };
+  }
+}
+
+/**
+ * Copie le carnet vers historique/ puis laisse un fichier vide.
+ * Pas de rename() : Drive Desktop le casse souvent.
+ * @param {{ dir?: string, now?: Date }} [opts]
+ */
+export async function archivePendingJournalFile(opts = {}) {
+  const now = opts.now ?? new Date();
+  const folder = opts.dir || lastKnownBackupDir() || DEFAULT_DRIVE_BACKUP_DIR;
+  const src = path.join(folder, PENDING_JOURNAL_NAME);
+  if (!driveLocationAvailable(folder)) {
+    return { ok: false, path: src, archived: null, error: "Drive indisponible" };
+  }
+  try {
+    const historyDir = path.join(folder, HISTORY_DIR_NAME);
+    await mkdir(historyDir, { recursive: true });
+    let previous = "";
+    if (existsSync(src)) {
+      try {
+        previous = await readFile(src, "utf8");
+      } catch {
+        previous = "";
+      }
+    }
+    let archived = null;
+    if (previous.trim()) {
+      archived = path.join(
+        historyDir,
+        `mouvements-applique-${historyStamp(now)}.json`,
+      );
+      await atomicWriteFile(archived, previous);
+    }
+    await atomicWriteFile(src, emptyPendingJournalJson(now));
+    return { ok: true, path: src, archived, error: null };
+  } catch (err) {
+    const message =
+      err && typeof err === "object" && "message" in err
+        ? String(err.message)
+        : String(err);
+    console.warn("[Débit Bois] Archive carnet Drive impossible :", message);
+    return { ok: false, path: src, archived: null, error: "Drive indisponible" };
+  }
+}
+

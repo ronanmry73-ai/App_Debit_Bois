@@ -5,13 +5,17 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   atomicWriteFile,
+  archivePendingJournalFile,
   DEFAULT_DRIVE_BACKUP_DIR,
   driveLocationAvailable,
+  emptyPendingJournalJson,
   formatDriveStatusLabel,
   historyFilesToDelete,
   historyStamp,
   mirrorToDrive,
   parseHistoryStamp,
+  PENDING_JOURNAL_NAME,
+  readPendingJournalFile,
   resetDriveBackupState,
   resolveBackupDir,
   shouldSnapshot,
@@ -130,4 +134,55 @@ test("libellé statut", () => {
   assert.match(label, /Sauvegarde Drive :/);
   assert.match(label, /12\/09/);
   assert.match(label, /16:02/);
+});
+
+test("carnet Drive : lecture, archive historique, pending vide", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "debit-pending-"));
+  const missing = await readPendingJournalFile(dir);
+  assert.equal(missing.ok, true);
+  assert.equal(missing.missing, true);
+  assert.equal(missing.raw, null);
+
+  const journal = {
+    version: 1,
+    createdAt: "2026-09-13T20:00:00.000Z",
+    items: [{ id: "t1", at: "2026-09-13T20:00:00.000Z", refId: "A", delta: 5, reason: "réception" }],
+  };
+  await atomicWriteFile(
+    path.join(dir, PENDING_JOURNAL_NAME),
+    JSON.stringify(journal, null, 2),
+  );
+  const read = await readPendingJournalFile(dir);
+  assert.equal(read.ok, true);
+  assert.match(read.raw ?? "", /"t1"/);
+
+  const now = new Date(2026, 8, 13, 22, 5, 7);
+  const archived = await archivePendingJournalFile({ dir, now });
+  assert.equal(archived.ok, true);
+  const pending = JSON.parse(await readFile(path.join(dir, PENDING_JOURNAL_NAME), "utf8"));
+  assert.equal(pending.version, 1);
+  assert.deepEqual(pending.items, []);
+  const histName = "mouvements-applique-2026-09-13_220507.json";
+  const hist = JSON.parse(
+    await readFile(path.join(dir, "historique", histName), "utf8"),
+  );
+  assert.equal(hist.items[0]?.id, "t1");
+  assert.equal(await readFile(path.join(dir, "debit-bois-dernier.json"), "utf8").catch(() => "absent"), "absent");
+});
+
+test("carnet Drive : H: absent → ko sans exception", async () => {
+  const out = await readPendingJournalFile(DEFAULT_DRIVE_BACKUP_DIR);
+  assert.equal(out.ok, false);
+  assert.equal(out.error, "Drive indisponible");
+  const arch = await archivePendingJournalFile({
+    dir: DEFAULT_DRIVE_BACKUP_DIR,
+  });
+  assert.equal(arch.ok, false);
+});
+
+test("carnet vide sérialisé", () => {
+  const raw = emptyPendingJournalJson(new Date("2026-09-13T20:00:00.000Z"));
+  const o = JSON.parse(raw);
+  assert.equal(o.version, 1);
+  assert.deepEqual(o.items, []);
 });

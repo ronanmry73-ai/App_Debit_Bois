@@ -3,11 +3,14 @@ import { test } from "node:test";
 import {
   applyJournal,
   classifyBridgeFile,
+  filterUnapplied,
   isMovementJournal,
   isPersistSnapshot,
   makePendingMove,
+  mergeAppliedIds,
   mergePendingMoves,
   moveRefLabel,
+  parseAppliedMoveIds,
   parseMovementJournal,
   pendingDeltaFor,
   PERSIST_AS_JOURNAL_MSG,
@@ -124,4 +127,20 @@ test("fusion du carnet : pas de doublon d’id", () => {
   ]);
   assert.equal(merged.length, 2);
   assert.equal(merged[1]?.id, "t2");
+});
+
+test("anti-double : ids déjà appliqués ignorés", () => {
+  const items = [
+    { id: "t1", at: "2026-09-13T20:00:00Z", refId: "A", delta: 5, reason: "réception" },
+    { id: "t2", at: "2026-09-13T20:01:00Z", refId: "A", delta: 1, reason: "pose" },
+  ];
+  const fresh = filterUnapplied(items, ["t1"]);
+  assert.equal(fresh.length, 1);
+  assert.equal(fresh[0]?.id, "t2");
+  const start = exampleStock();
+  const { stock } = applyJournal(start, fresh);
+  assert.equal(stock.find((s) => s.id === PANEL_A_ID)?.qty, 11);
+  const ids = mergeAppliedIds(["t1"], ["t1", "t2"]);
+  assert.deepEqual(ids, ["t1", "t2"]);
+  assert.deepEqual(parseAppliedMoveIds(["t1", "t1", ""]), ["t1"]);
 });
