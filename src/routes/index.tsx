@@ -21,6 +21,7 @@ import { QuoteDocument } from "@/components/quote-document";
 import { StockPanel } from "@/components/stock-panel";
 import { TerrainStock } from "@/components/terrain-stock";
 import { PendingMovesBanner } from "@/components/pending-moves-banner";
+import { DriveLinkBar } from "@/components/drive-link-bar";
 import { CatalogPanel } from "@/components/catalog-panel";
 import { ProjectsBar } from "@/components/projects-bar";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -120,6 +121,7 @@ import {
   type PendingMove,
 } from "@/lib/movements";
 import { isTerrainFlag, useTerrainMode } from "@/lib/terrain";
+import { useTerrainDrive } from "@/lib/use-terrain-drive";
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>) => {
@@ -298,7 +300,11 @@ function Home() {
     return [...ids];
   }, [usedRefIds, projects]);
 
-  function applyPersisted(saved: PersistedState, fromRestore = false) {
+  function applyPersisted(
+    saved: PersistedState,
+    fromRestore = false,
+    opts?: { keepPendingMoves?: boolean },
+  ) {
     skipNextPack.current = true;
     skipWastePrefill.current = true;
     lastPlanId.current = "";
@@ -330,9 +336,11 @@ function Home() {
     setCalculatedAt(named?.calculatedAt ?? saved.calculatedAt ?? null);
     setQuoteIssuedAt(named?.quoteIssuedAt ?? saved.quoteIssuedAt ?? null);
     setCurrentProjectId(saved.currentProjectId || newId());
-    setPendingMoves(saved.pendingMoves ?? []);
-    setAppliedMoveIds(saved.appliedMoveIds ?? []);
-    appliedIdsRef.current = saved.appliedMoveIds ?? [];
+    if (!opts?.keepPendingMoves) {
+      setPendingMoves(saved.pendingMoves ?? []);
+      setAppliedMoveIds(saved.appliedMoveIds ?? []);
+      appliedIdsRef.current = saved.appliedMoveIds ?? [];
+    }
     setSavedFp(
       named
         ? fpOf({
@@ -444,6 +452,23 @@ function Home() {
       offCheck?.();
     };
   }, [hydrated, terrain]);
+
+  const phoneDrive = useTerrainDrive({
+    enabled: terrain && !desktopApi(),
+    hydrated,
+    pendingMoves,
+    setPendingMoves,
+    onDernier: (raw) => {
+      const saved = migrateState(raw, {
+        settings: DEFAULT_SETTINGS,
+        emptyRow: INITIAL_EMPTY_ROW,
+      });
+      applyPersisted(saved, false, { keepPendingMoves: true });
+      setFlash("Stock Drive à jour.");
+      return true;
+    },
+    onMessage: (msg) => setFlash(msg),
+  });
 
   useEffect(() => {
     if (!hydrated) return;
@@ -1469,14 +1494,29 @@ function Home() {
           </div>
         </div>
         {terrain ? (
-          <p
+          <div
             className={cn(
-              "mx-auto w-full px-4 pb-3 text-xs text-muted-foreground sm:px-6",
+              "mx-auto flex w-full flex-col gap-2 px-4 pb-3 sm:px-6",
               shellWidth,
             )}
           >
-            {PENDING_JOURNAL_HINT}
-          </p>
+            <DriveLinkBar
+              status={phoneDrive.status}
+              pendingCount={pendingMoves.length}
+              onConnect={() => {
+                void phoneDrive.connect();
+              }}
+              onDisconnect={phoneDrive.disconnect}
+              onSendNow={() => {
+                void phoneDrive.pushPending();
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              {phoneDrive.status.linked
+                ? "Stock / plans / devis lus depuis debit-bois-dernier.json (écriture PC seulement). Le carnet Terrain part dans mouvements-pending.json."
+                : PENDING_JOURNAL_HINT}
+            </p>
+          </div>
         ) : null}
       </header>
 
@@ -1518,6 +1558,7 @@ function Home() {
                 catalog={catalog}
                 pending={pendingMoves}
                 onPending={setPendingMoves}
+                driveLinked={phoneDrive.status.linked}
               />
             )}
             {viewMode === "atelier" && (
@@ -1539,7 +1580,7 @@ function Home() {
                 />
               ) : (
                 <p className="rounded-xl bg-card px-5 py-8 text-center text-sm text-muted-foreground shadow-[var(--shadow-border)]">
-                  Importez le JSON du PC pour afficher les plans du projet chargé.
+                  Importez le JSON du PC, ou liez Google Drive, pour afficher les plans du projet chargé.
                 </p>
               )
             )}
@@ -1555,7 +1596,7 @@ function Home() {
                 />
               ) : (
                 <p className="rounded-xl bg-card px-5 py-8 text-center text-sm text-muted-foreground shadow-[var(--shadow-border)]">
-                  Importez le JSON du PC pour afficher le devis du projet chargé.
+                  Importez le JSON du PC, ou liez Google Drive, pour afficher le devis du projet chargé.
                 </p>
               )
             )}

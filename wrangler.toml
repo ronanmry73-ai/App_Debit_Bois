@@ -1,3 +1,15 @@
+# Cloudflare Pages
+# Commande de build : npm run build
+# Dossier de sortie  : dist
+#
+# Variable (Pages → Settings → Environment variables, au BUILD) :
+#   VITE_GOOGLE_CLIENT_ID = xxxxx.apps.googleusercontent.com
+# ID public OAuth « Application Web » — pas un secret.
+# Google Cloud : activer l’API Drive.
+# Origines JavaScript autorisées : l’URL Pages + http://localhost:8080
+# Scope : https://www.googleapis.com/auth/drive
+# (drive.file seul ne peut pas modifier un JSON créé par le PC via H:\)
+#
 name = "app-debit-bois"
 compatibility_date = "2026-09-13"
 

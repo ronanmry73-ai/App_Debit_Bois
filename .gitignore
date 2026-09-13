@@ -3,6 +3,7 @@ node_modules/
 .github_repo
 .env
 .env.*
+!.env.example
 release/
 dist/
 .output/

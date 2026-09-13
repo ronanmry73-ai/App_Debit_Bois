@@ -20,9 +20,16 @@ type Props = {
   catalog: Catalog;
   pending: PendingMove[];
   onPending: (next: PendingMove[]) => void;
+  driveLinked?: boolean;
 };
 
-export function TerrainStock({ items, catalog, pending, onPending }: Props) {
+export function TerrainStock({
+  items,
+  catalog,
+  pending,
+  onPending,
+  driveLinked = false,
+}: Props) {
   const [qtyDraft, setQtyDraft] = useState("1");
   const [reason, setReason] = useState("");
   const [picked, setPicked] = useState<string | null>(items[0]?.id ?? null);
@@ -61,14 +68,16 @@ export function TerrainStock({ items, catalog, pending, onPending }: Props) {
             Stock chantier
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Entrée et sortie restent dans le carnet. Envoyez
-            mouvements-pending.json dans le dossier Drive ; le PC appliquera
-            les quantités. Ici le stock importé ne bouge pas.
+            {driveLinked
+              ? "Entrée et sortie partent dans le carnet Drive. Le stock affiché vient du PC (dernier.json) ; il ne bouge ici qu’après application à l’atelier."
+              : "Entrée et sortie restent dans le carnet. Envoyez mouvements-pending.json dans le dossier Drive ; le PC appliquera les quantités. Ici le stock importé ne bouge pas."}
           </p>
           {pending.length > 0 && (
             <p className="mt-3 rounded-lg bg-accent px-3 py-2 text-sm text-accent-foreground">
-              {pending.length} mouvement{pending.length > 1 ? "s" : ""} en attente
-              — Envoyer le carnet (mouvements-pending.json).
+              {pending.length} mouvement{pending.length > 1 ? "s" : ""} à envoyer
+              {driveLinked
+                ? " — envoi Drive automatique."
+                : " — Envoyer le carnet (mouvements-pending.json)."}
             </p>
           )}
           {message && <p className="mt-3 text-sm">{message}</p>}

@@ -40,7 +40,13 @@ Réglages (aussi dans `wrangler.toml`) :
 | Commande de build | `npm run build` |
 | Dossier de sortie | `dist` |
 
-Aucune variable d’environnement. Sur le téléphone : installer l’app, importer `debit-bois-dernier.json`, saisir Entrée/Sortie, **Envoyer le carnet** (`mouvements-pending.json` dans le dossier Drive). Sur le PC : le bandeau **Appliquer** apparaît au focus, ou **Importer le carnet** à la main.
+Variable d’environnement (build Pages, **pas un secret**) :
+
+`VITE_GOOGLE_CLIENT_ID` — ID client OAuth **Application Web** (Google Cloud Console, API Drive activée). Origines JS : l’URL Pages + `http://localhost:8080`. Voir [`.env.example`](.env.example) et le commentaire en tête de [`wrangler.toml`](wrangler.toml).
+
+Sur le téléphone : **Lier Google Drive** (dossier `Sauvegarde Débit Bois ERP`). Stock / plans / devis se lisent dans `debit-bois-dernier.json` (écriture **PC seulement**). Chaque Entrée/Sortie enrichit `mouvements-pending.json`. Sans lien : import / export JSON et **Envoyer le carnet** restent disponibles.
+
+Sur le PC : le bandeau **Appliquer** apparaît au focus, ou **Importer le carnet** à la main.
 
 ## Déployer sur Vercel
 
