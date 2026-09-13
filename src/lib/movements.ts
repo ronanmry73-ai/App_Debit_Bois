@@ -4,13 +4,20 @@
  * Le PC rejoue le carnet sur stock[] ; les projets restent intacts.
  */
 
-import { applyDelta, findStockForSpec, type StockItem, type StockMove } from "./stock.ts";
+import {
+  applyDelta,
+  findByName,
+  findStockForSpec,
+  type StockItem,
+  type StockMove,
+} from "./stock.ts";
 import { newId } from "./utils.ts";
 
 export type PendingMove = {
   id: string;
   at: string;
   refId: string;
+  sku?: string;
   delta: number;
   reason: string;
 };
@@ -20,6 +27,9 @@ export type MovementJournal = {
   createdAt: string;
   items: PendingMove[];
 };
+
+export const PERSIST_AS_JOURNAL_MSG =
+  "Ce fichier est une sauvegarde complète — utilise Importer.";
 
 export function stockRefKey(item: Pick<StockItem, "id" | "refId">): string {
   const ref = typeof item.refId === "string" ? item.refId.trim() : "";
@@ -33,15 +43,19 @@ export function parsePendingMoves(raw: unknown): PendingMove[] {
     if (!row || typeof row !== "object") continue;
     const o = row as Record<string, unknown>;
     const delta = Number(o.delta);
+    const sku = typeof o.sku === "string" ? o.sku.trim() : "";
     const refId = typeof o.refId === "string" ? o.refId.trim() : "";
-    if (!refId || !Number.isFinite(delta) || delta === 0) continue;
-    out.push({
+    const key = refId || sku;
+    if (!key || !Number.isFinite(delta) || delta === 0) continue;
+    const move: PendingMove = {
       id: typeof o.id === "string" && o.id.trim() ? o.id : newId(),
       at: typeof o.at === "string" && o.at.trim() ? o.at : new Date().toISOString(),
-      refId,
+      refId: key,
       delta,
       reason: typeof o.reason === "string" ? o.reason.trim() : "",
-    });
+    };
+    if (sku) move.sku = sku;
+    out.push(move);
   }
   return out;
 }
@@ -54,7 +68,10 @@ export function isMovementJournal(raw: unknown): raw is MovementJournal {
   return o.items.every((row) => {
     if (!row || typeof row !== "object") return false;
     const it = row as Record<string, unknown>;
-    return typeof it.refId === "string" && Number.isFinite(Number(it.delta));
+    const ref =
+      (typeof it.refId === "string" && it.refId.trim()) ||
+      (typeof it.sku === "string" && it.sku.trim());
+    return !!ref && Number.isFinite(Number(it.delta));
   });
 }
 
@@ -68,6 +85,9 @@ export function parseMovementJournal(
     } catch {
       return { ok: false, error: "Le fichier n’est pas un JSON valide." };
     }
+  }
+  if (isPersistSnapshot(data)) {
+    return { ok: false, error: PERSIST_AS_JOURNAL_MSG };
   }
   if (!isMovementJournal(data)) {
     return { ok: false, error: "Ce fichier n’est pas un carnet de mouvements." };
@@ -102,13 +122,24 @@ export function isPersistSnapshot(raw: unknown): boolean {
   if (!raw || typeof raw !== "object") return false;
   const o = raw as Record<string, unknown>;
   if (o.kind === "debit-bois-project") return false;
-  if (isMovementJournal(o)) return false;
   return (
     o.version === 5 &&
     Array.isArray(o.stock) &&
     !!o.catalog &&
     typeof o.catalog === "object"
   );
+}
+
+export type BridgeFile =
+  | { kind: "journal"; journal: MovementJournal }
+  | { kind: "persist" }
+  | { kind: "invalid"; error: string };
+
+export function classifyBridgeFile(raw: unknown): BridgeFile {
+  if (isPersistSnapshot(raw)) return { kind: "persist" };
+  const parsed = parseMovementJournal(raw);
+  if (parsed.ok) return { kind: "journal", journal: parsed.journal };
+  return { kind: "invalid", error: parsed.error };
 }
 
 export function pendingDeltaFor(
@@ -121,12 +152,41 @@ export function pendingDeltaFor(
 export function findStockForRef(
   stock: StockItem[],
   refId: string,
+  sku?: string,
 ): StockItem | undefined {
-  const exactRef = stock.find((it) => it.refId === refId && it.kind !== "offcut");
+  const key = refId.trim();
+  const skuKey = (sku ?? "").trim();
+  if (!key && !skuKey) return undefined;
+  const needle = key || skuKey;
+  const exactRef = stock.find((it) => it.refId === needle && it.kind !== "offcut");
   if (exactRef) return exactRef;
-  const byId = stock.find((it) => it.id === refId);
+  const byId = stock.find((it) => it.id === needle);
   if (byId) return byId;
-  return findStockForSpec(stock, refId);
+  const bySku = stock.find(
+    (it) =>
+      it.kind !== "offcut" &&
+      !!it.sku &&
+      (it.sku === needle || (skuKey !== "" && it.sku === skuKey)),
+  );
+  if (bySku) return bySku;
+  const byName =
+    findByName(stock, needle) ?? (skuKey ? findByName(stock, skuKey) : undefined);
+  if (byName) return byName;
+  return findStockForSpec(stock, needle);
+}
+
+export function moveRefLabel(stock: StockItem[], move: PendingMove): string {
+  const item = findStockForRef(stock, move.refId, move.sku);
+  return item?.sku || item?.name || move.sku || move.refId;
+}
+
+export function mergePendingMoves(
+  current: PendingMove[],
+  incoming: PendingMove[],
+): PendingMove[] {
+  const seen = new Set(current.map((m) => m.id));
+  const extra = incoming.filter((m) => !seen.has(m.id));
+  return extra.length === 0 ? current : [...current, ...extra];
 }
 
 export function applyJournal(
@@ -141,7 +201,7 @@ export function applyJournal(
   const applied: PendingMove[] = [];
   const skipped: PendingMove[] = [];
   for (const move of items) {
-    const target = findStockForRef(next, move.refId);
+    const target = findStockForRef(next, move.refId, move.sku);
     if (!target || !Number.isFinite(move.delta) || move.delta === 0) {
       skipped.push(move);
       continue;
@@ -159,7 +219,7 @@ export function movesFromJournal(
 ): StockMove[] {
   const extra: StockMove[] = [];
   for (const move of items) {
-    const target = findStockForRef(stock, move.refId);
+    const target = findStockForRef(stock, move.refId, move.sku);
     extra.push({
       id: move.id,
       itemId: target?.id ?? move.refId,
@@ -174,15 +234,18 @@ export function movesFromJournal(
 }
 
 export function makePendingMove(
-  item: Pick<StockItem, "id" | "refId">,
+  item: Pick<StockItem, "id" | "refId" | "sku">,
   delta: number,
   reason: string,
 ): PendingMove {
-  return {
+  const move: PendingMove = {
     id: newId(),
     at: new Date().toISOString(),
     refId: stockRefKey(item),
     delta,
     reason: reason.trim() || (delta >= 0 ? "Réception chantier" : "Sortie chantier"),
   };
+  const sku = typeof item.sku === "string" ? item.sku.trim() : "";
+  if (sku) move.sku = sku;
+  return move;
 }

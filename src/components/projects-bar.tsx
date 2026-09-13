@@ -26,6 +26,7 @@ type Props = {
   onDelete: (id: string) => void;
   onExport: () => void;
   onImport: () => void;
+  onImportJournal: () => void;
   jobStatus: JobStatusInput;
 };
 
@@ -58,6 +59,7 @@ export function ProjectsBar({
   onDelete,
   onExport,
   onImport,
+  onImportJournal,
   jobStatus,
 }: Props) {
   const [q, setQ] = useState("");
@@ -169,6 +171,9 @@ export function ProjectsBar({
             </Button>
             <Button type="button" variant="outline" size="sm" onClick={onImport}>
               Importer
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={onImportJournal}>
+              Importer le carnet
             </Button>
           </div>
 

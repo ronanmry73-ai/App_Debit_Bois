@@ -20,6 +20,7 @@ import { QuotePanel } from "@/components/quote-panel";
 import { QuoteDocument } from "@/components/quote-document";
 import { StockPanel } from "@/components/stock-panel";
 import { TerrainStock } from "@/components/terrain-stock";
+import { PendingMovesBanner } from "@/components/pending-moves-banner";
 import { CatalogPanel } from "@/components/catalog-panel";
 import { ProjectsBar } from "@/components/projects-bar";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -105,9 +106,12 @@ import {
 } from "@/lib/desktop";
 import {
   applyJournal,
+  classifyBridgeFile,
   isPersistSnapshot,
+  mergePendingMoves,
   movesFromJournal,
   parseMovementJournal,
+  PERSIST_AS_JOURNAL_MSG,
   serializeMovementJournal,
   type PendingMove,
 } from "@/lib/movements";
@@ -1066,9 +1070,16 @@ function Home() {
 
   function applyPendingJournal() {
     const { stock: next, applied, skipped } = applyJournal(stock, pendingMoves);
+    const nextMoves = movesFromJournal(moves, stock, applied);
     setStock(next);
-    setMoves(movesFromJournal(moves, stock, applied));
+    setMoves(nextMoves);
     setPendingMoves([]);
+    void savePersisted({
+      ...collectPersisted(),
+      stock: next,
+      moves: nextMoves,
+      pendingMoves: [],
+    });
     const parts = [`${applied.length} mouvement${applied.length > 1 ? "s" : ""} appliqué${applied.length > 1 ? "s" : ""} au stock.`];
     if (skipped.length > 0) {
       parts.push(`${skipped.length} ignoré${skipped.length > 1 ? "s" : ""} (référence inconnue).`);
@@ -1159,6 +1170,48 @@ function Home() {
       return;
     }
     applyImported(parsed.project, parsed.catalog);
+  }
+
+  async function handleImportJournal() {
+    const raw = await importText();
+    if (raw == null) return;
+    let data: unknown;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      setDialog({
+        kind: "alert",
+        title: "Fichier invalide",
+        message: "Le fichier n’est pas un JSON valide.",
+      });
+      return;
+    }
+    const classified = classifyBridgeFile(data);
+    if (classified.kind === "persist") {
+      setDialog({
+        kind: "alert",
+        title: "Pas un carnet",
+        message: PERSIST_AS_JOURNAL_MSG,
+      });
+      return;
+    }
+    if (classified.kind !== "journal") {
+      setDialog({
+        kind: "alert",
+        title: "Fichier invalide",
+        message: classified.error,
+      });
+      return;
+    }
+    const items = classified.journal.items;
+    if (items.length === 0) {
+      setFlash("Carnet vide — aucun mouvement à appliquer.");
+      return;
+    }
+    setPendingMoves((prev) => mergePendingMoves(prev, items));
+    setFlash(
+      `${items.length} mouvement${items.length > 1 ? "s" : ""} Terrain en attente — Appliquer`,
+    );
   }
 
   const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
@@ -1333,6 +1386,14 @@ function Home() {
           shellWidth,
         )}
       >
+        {!terrain && pendingMoves.length > 0 && (
+          <PendingMovesBanner
+            items={pendingMoves}
+            stock={stock}
+            onApply={() => setDialog({ kind: "apply-moves" })}
+          />
+        )}
+
         {(flash || error) && (
           <div className="no-print space-y-2">
             {flash && (
@@ -1345,22 +1406,6 @@ function Home() {
                 {error}
               </p>
             )}
-          </div>
-        )}
-
-        {!terrain && pendingMoves.length > 0 && (
-          <div className="no-print flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm">
-            <p>
-              {pendingMoves.length} mouvement{pendingMoves.length > 1 ? "s" : ""}{" "}
-              en attente — le stock atelier n’a pas encore bougé. Les projets
-              restent intacts.
-            </p>
-            <Button
-              type="button"
-              onClick={() => setDialog({ kind: "apply-moves" })}
-            >
-              {pendingMoves.length} mouvement{pendingMoves.length > 1 ? "s" : ""} — Appliquer
-            </Button>
           </div>
         )}
 
@@ -1488,6 +1533,9 @@ function Home() {
               }}
               onImport={() => {
                 void handleImport();
+              }}
+              onImportJournal={() => {
+                void handleImportJournal();
               }}
               jobStatus={jobStatus}
             />
