@@ -1,5 +1,6 @@
 import { ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import { useMemo, useState } from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,7 @@ export function TerrainStock({
   const [reason, setReason] = useState("");
   const [picked, setPicked] = useState<string | null>(items[0]?.id ?? null);
   const [message, setMessage] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<PendingMove | null>(null);
 
   const visible = useMemo(
     () => items.filter((it) => it.kind !== "offcut" || (it.qty ?? 0) > 0 || pendingDeltaFor(pending, stockRefKey(it)) !== 0),
@@ -72,14 +74,7 @@ export function TerrainStock({
               ? "Entrée et sortie partent dans le carnet Drive. Le stock affiché vient du PC (dernier.json) ; il ne bouge ici qu’après application à l’atelier."
               : "Entrée et sortie restent dans le carnet. Envoyez mouvements-pending.json dans le dossier Drive ; le PC appliquera les quantités. Ici le stock importé ne bouge pas."}
           </p>
-          {pending.length > 0 && (
-            <p className="mt-3 rounded-lg bg-accent px-3 py-2 text-sm text-accent-foreground">
-              {pending.length} mouvement{pending.length > 1 ? "s" : ""}
-              {driveLinked
-                ? " — transmission Drive automatique, en attente d’application à l’atelier."
-                : " à envoyer — Enregistrez le carnet (mouvements-pending.json)."}
-            </p>
-          )}
+
           {message && <p className="mt-3 text-sm">{message}</p>}
         </CardContent>
       </Card>
@@ -174,6 +169,33 @@ export function TerrainStock({
         </Card>
       )}
 
+      <ConfirmDialog
+        open={confirmRemove !== null}
+        title="Retirer ce mouvement ?"
+        message={
+          confirmRemove
+            ? (confirmRemove.delta > 0 ? "+" : "") +
+              confirmRemove.delta +
+              " · " +
+              (confirmRemove.reason || "sans motif") +
+              " — ce mouvement sera retiré du carnet et ne partira pas vers le PC."
+            : ""
+        }
+        actions={[
+          { label: "Annuler", variant: "outline", onClick: () => setConfirmRemove(null) },
+          {
+            label: "Retirer",
+            variant: "destructive",
+            onClick: () => {
+              if (confirmRemove) {
+                onPending(pending.filter((x) => x.id !== confirmRemove.id));
+              }
+              setConfirmRemove(null);
+            },
+          },
+        ]}
+      />
+
       {pending.length > 0 && (
         <Card>
           <CardContent className="p-4">
@@ -188,8 +210,8 @@ export function TerrainStock({
                   </span>
                   <button
                     type="button"
-                    className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-                    onClick={() => onPending(pending.filter((x) => x.id !== m.id))}
+                    className="rounded-md px-2 py-1 text-xs text-destructive underline-offset-2 hover:underline"
+                    onClick={() => setConfirmRemove(m)}
                   >
                     Retirer
                   </button>

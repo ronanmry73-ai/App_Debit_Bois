@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   FileText,
   Calculator,
@@ -21,6 +21,8 @@ import { QuoteDocument } from "@/components/quote-document";
 import { StockPanel } from "@/components/stock-panel";
 import { TerrainStock } from "@/components/terrain-stock";
 import { PendingMovesBanner } from "@/components/pending-moves-banner";
+import { PhoneLinkButton } from "@/components/phone-link-button";
+import { ViewModeToggle } from "@/components/view-mode-toggle";
 import { DriveLinkBar } from "@/components/drive-link-bar";
 import { CatalogPanel } from "@/components/catalog-panel";
 import { ProjectsBar } from "@/components/projects-bar";
@@ -119,13 +121,15 @@ import {
   serializeMovementJournal,
   type PendingMove,
 } from "@/lib/movements";
-import { isTerrainFlag, useTerrainMode } from "@/lib/terrain";
+import { terrainPreferenceFromSearch, useTerrainMode, type TerrainPreference } from "@/lib/terrain";
 import { useTerrainDrive } from "@/lib/use-terrain-drive";
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>) => {
-    if (!isTerrainFlag(search.terrain)) return {};
-    return { terrain: 1 as const };
+    const preference = terrainPreferenceFromSearch(search);
+    if (preference === "on") return { terrain: 1 as const };
+    if (preference === "off") return { terrain: 0 as const };
+    return {};
   },
   component: Home,
 });
@@ -233,7 +237,9 @@ function packIsValid(out: OptimizeOutput | null, selected: string): boolean {
 
 function Home() {
   const search = Route.useSearch();
-  const terrain = useTerrainMode(isTerrainFlag(search.terrain));
+  const navigate = useNavigate();
+  const terrainPreference = terrainPreferenceFromSearch(search);
+  const terrain = useTerrainMode(terrainPreference);
   const [rows, setRows] = useState<PieceRow[]>([INITIAL_EMPTY_ROW]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [result, setResult] = useState<OptimizeOutput | null>(null);
@@ -272,6 +278,15 @@ function Home() {
   const [appliedMoveIds, setAppliedMoveIds] = useState<string[]>([]);
   const [driveOrigin, setDriveOrigin] = useState(false);
   const appliedIdsRef = useRef<string[]>([]);
+  // Mode terrain : on ouvre sur le stock, qui est le travail courant sur un
+  // chantier. Appliqué après le premier rendu pour rester aligné sur la
+  // coquille prérendue (aucune divergence d'hydratation).
+  const terrainStockApplied = useRef(false);
+  useEffect(() => {
+    if (!terrain || terrainStockApplied.current) return;
+    terrainStockApplied.current = true;
+    setViewMode("stock");
+  }, [terrain]);
 
   const liveFp = useMemo(
     () => fpOf({ rows, settings, selected, meta: projectMeta }),
@@ -696,6 +711,14 @@ function Home() {
     }
     setSettings((s) => (s.wastePct === tau ? s : { ...s, wastePct: tau }));
   }, [current, selected, settings.wastePct]);
+
+  function setTerrainPreference(next: TerrainPreference) {
+    void navigate({
+      to: "/",
+      search: next === "on" ? { terrain: 1 } : next === "off" ? { terrain: 0 } : {},
+      replace: true,
+    });
+  }
 
   function goDevis() {
     setCatalogOpen(false);
@@ -1371,60 +1394,73 @@ function Home() {
           <div className="flex flex-wrap gap-2">
             {terrain ? (
               <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    void handleImport();
-                  }}
-                >
-                  <Upload />
-                  Importer JSON
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    void handleExportWorkshop();
-                  }}
-                >
-                  <Download />
-                  Exporter JSON
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    void handleExportMoves();
-                  }}
-                >
-                  <Download />
-                  Envoyer le carnet
-                </Button>
-                <Button
-                  type="button"
-                  variant={viewMode === "stock" ? "default" : "outline"}
-                  onClick={() => setViewMode("stock")}
-                >
-                  <Package />
-                  Stock
-                </Button>
-                <Button
-                  type="button"
-                  variant={viewMode === "atelier" ? "default" : "outline"}
-                  onClick={() => setViewMode("atelier")}
-                >
-                  <Layers />
-                  Plans
-                </Button>
-                <Button
-                  type="button"
-                  variant={viewMode === "devis" ? "default" : "outline"}
-                  onClick={() => setViewMode("devis")}
-                >
-                  <FileText />
-                  Devis
-                </Button>
+                {/* Fichier : échanges et carnet — groupe secondaire */}
+                <div className="flex w-full flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      void handleImport();
+                    }}
+                  >
+                    <Upload />
+                    Importer JSON
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      void handleExportWorkshop();
+                    }}
+                  >
+                    <Download />
+                    Exporter JSON
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      void handleExportMoves();
+                    }}
+                  >
+                    <Download />
+                    Envoyer le carnet
+                  </Button>
+                </div>
+                {/* Navigation : les trois vues, un seul groupe */}
+                <div className="grid w-full grid-cols-3 gap-2">
+                  <Button
+                    type="button"
+                    variant={viewMode === "stock" ? "default" : "outline"}
+                    onClick={() => setViewMode("stock")}
+                  >
+                    <Package />
+                    Stock
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={viewMode === "atelier" ? "default" : "outline"}
+                    onClick={() => setViewMode("atelier")}
+                  >
+                    <Layers />
+                    Plans
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={viewMode === "devis" ? "default" : "outline"}
+                    onClick={() => setViewMode("devis")}
+                  >
+                    <FileText />
+                    Devis
+                  </Button>
+                </div>
+                <ViewModeToggle
+                  preference={terrainPreference}
+                  onPreference={setTerrainPreference}
+                />
               </>
             ) : (
               <>
@@ -1489,6 +1525,18 @@ function Home() {
                 PDF client
               </Button>
             )}
+            <ViewModeToggle
+              preference={terrainPreference}
+              onPreference={setTerrainPreference}
+            />
+            <PhoneLinkButton
+              storedUrl={workshopPrefs.phoneUrl ?? ""}
+              onStoredUrl={(next) => {
+                const updated = { ...workshopPrefs, phoneUrl: next };
+                setWorkshopPrefs(updated);
+                void savePersisted({ ...collectPersisted(), workshopPrefs: updated });
+              }}
+            />
               </>
             )}
           </div>

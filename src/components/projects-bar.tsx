@@ -248,7 +248,8 @@ export function ProjectsBar({
                         <Button
                           type="button"
                           size="sm"
-                          variant="ghost"
+                          variant="destructive"
+                          className="ml-auto"
                           onClick={() => onDelete(p.id)}
                         >
                           Supprimer

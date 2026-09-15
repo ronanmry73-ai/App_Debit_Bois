@@ -128,6 +128,8 @@ export type WorkshopPrefs = {
   legal: string;
   /** Dossier miroir Drive Desktop. Vide = défaut Electron (H:\\Mon Drive\\…). */
   driveBackupPath?: string;
+  /** Adresse de l'application déployée, à ouvrir sur le téléphone. */
+  phoneUrl?: string;
 };
 
 export function emptyWorkshopPrefs(): WorkshopPrefs {
@@ -144,6 +146,7 @@ export function emptyWorkshopPrefs(): WorkshopPrefs {
     payment: "",
     legal: "",
     driveBackupPath: "",
+    phoneUrl: "",
   };
 }
 
@@ -195,6 +198,7 @@ export function migrateWorkshopPrefs(
       companyName: typeof o.companyName === "string" ? o.companyName : "",
       driveBackupPath:
         typeof o.driveBackupPath === "string" ? o.driveBackupPath.trim() : "",
+      phoneUrl: typeof o.phoneUrl === "string" ? o.phoneUrl.trim() : "",
     };
   }
   if (settings.companyName && !isDemoCompany(settings.companyName)) {

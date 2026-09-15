@@ -50,6 +50,8 @@ Un mouvement n’est retiré du téléphone qu’une fois le carnet appliqué pa
 
 Sur le PC : le bandeau **Appliquer** apparaît au focus, ou **Importer le carnet** à la main. Un mouvement dont la référence est introuvable reste en attente au lieu d’être ignoré.
 
+Sur un écran étroit, l’interface terrain s’active automatiquement. Le bouton **Vue atelier / Vue terrain** de l’en-tête force l’une ou l’autre vue, et **Auto** revient à la détection automatique (`?terrain=1` ou `?terrain=0` dans l’adresse). Le bouton **Lien téléphone**, sur le poste atelier, affiche et copie l’adresse à ouvrir sur le téléphone.
+
 ## Déployer sur Vercel
 
 Le projet est déjà configuré avec le preset Nitro `vercel`.
