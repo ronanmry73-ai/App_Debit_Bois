@@ -8,3 +8,5 @@ release/
 dist/
 .output/
 node_modules.orig/
+# Sortie de build Vercel : régénérée à chaque build, ne doit pas être versionnée
+.vercel/

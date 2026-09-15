@@ -10,6 +10,7 @@ type Props = {
   onConnect: () => void;
   onDisconnect: () => void;
   onSendNow: () => void;
+  onRepair: () => void;
 };
 
 export function DriveLinkBar({
@@ -18,6 +19,7 @@ export function DriveLinkBar({
   onConnect,
   onDisconnect,
   onSendNow,
+  onRepair,
 }: Props) {
   const busy = status.linking || status.pulling || status.pushing;
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
@@ -76,7 +78,14 @@ export function DriveLinkBar({
       {status.linked && status.email ? (
         <p className="text-xs text-muted-foreground">{status.email}</p>
       ) : null}
-      {status.error && <p className="text-sm text-destructive">{status.error}</p>}
+      {status.error && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm text-destructive">{status.error}</p>
+          <Button type="button" size="sm" variant="outline" onClick={onRepair} disabled={busy}>
+            Réparer le carnet
+          </Button>
+        </div>
+      )}
       {status.pulling && !status.error && (
         <p className="text-xs text-muted-foreground">Lecture stock Drive…</p>
       )}

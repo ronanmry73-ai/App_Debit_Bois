@@ -1558,11 +1558,14 @@ function Home() {
               onSendNow={() => {
                 void phoneDrive.pushPending();
               }}
+              onRepair={() => {
+                void phoneDrive.repairPending();
+              }}
             />
             <p className="text-xs text-muted-foreground">
               {phoneDrive.status.linked
-                ? "Stock / plans / devis lus depuis debit-bois-dernier.json (écriture PC seulement). Le carnet Terrain part dans mouvements-pending.json."
-                : PENDING_JOURNAL_HINT}
+                ? "Stock, plans et devis viennent du PC. Tes mouvements partent dans le carnet, en attente d’application à l’atelier."
+                : "Sans lien Drive : enregistre le carnet, puis dépose-le dans le dossier « Sauvegarde Débit Bois ERP » sur le PC. Ne l’écrase pas avant que l’atelier l’ait appliqué."}
             </p>
           </div>
         ) : null}
@@ -2013,7 +2016,7 @@ function Home() {
         )}
       >
         {terrain
-          ? "Mode terrain. Importez le JSON du PC, saisissez les mouvements, envoyez mouvements-pending.json dans le dossier Drive. Le stock atelier se met à jour sur l’ordinateur."
+          ? "Mode terrain : le stock, les plans et les devis viennent du PC. Saisis tes mouvements puis envoie le carnet ; l’atelier applique les quantités au stock."
           : "Unités en millimètres. Atelier, stock et devis. Catalogue à part. Le projet est un fichier : enregistrez pour le conserver."}
         {desktopApp && (
           <>

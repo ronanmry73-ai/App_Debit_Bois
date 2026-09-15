@@ -9,6 +9,7 @@ import type { Catalog } from "@/lib/catalog";
 import { familyById } from "@/lib/catalog";
 import {
   makePendingMove,
+  moveRefLabel,
   pendingDeltaFor,
   stockRefKey,
   type PendingMove,
@@ -71,8 +72,8 @@ export function TerrainStock({
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
             {driveLinked
-              ? "Entrée et sortie partent dans le carnet Drive. Le stock affiché vient du PC (dernier.json) ; il ne bouge ici qu’après application à l’atelier."
-              : "Entrée et sortie restent dans le carnet. Envoyez mouvements-pending.json dans le dossier Drive ; le PC appliquera les quantités. Ici le stock importé ne bouge pas."}
+              ? "Entrée et sortie partent dans le carnet Drive. Le stock affiché vient du PC ; il ne bouge ici qu’après application à l’atelier."
+              : "Entrée et sortie restent dans le carnet. Enregistre le carnet et dépose-le dans le dossier Drive ; le PC appliquera les quantités. Ici le stock importé ne bouge pas."}
           </p>
 
           {message && <p className="mt-3 text-sm">{message}</p>}
@@ -205,7 +206,7 @@ export function TerrainStock({
                 <li key={m.id} className="flex justify-between gap-2">
                   <span>
                     {m.delta > 0 ? "+" : ""}
-                    {m.delta} · {m.refId}
+                    {m.delta} · {moveRefLabel(items, m)}
                     {m.reason ? ` · ${m.reason}` : ""}
                   </span>
                   <button

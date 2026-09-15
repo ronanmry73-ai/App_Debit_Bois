@@ -17,6 +17,9 @@ import { PENDING_JOURNAL_NAME, type PendingMove } from "./movements.ts";
 const DRIVE = "https://www.googleapis.com/drive/v3";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
 
+/** Délai maximal d'un appel Drive : sans lui, une requête qui pend fige la synchro. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export class DriveAuthError extends Error {
   constructor() {
     super("Session Google expirée.");
@@ -47,7 +50,13 @@ export function createDriveClient(opts: {
   async function req(url: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${token}`);
-    const res = await $fetch(url, { ...init, headers });
+    const res = await $fetch(url, {
+      ...init,
+      headers,
+      // Les verrous pull/push ne se relâchent qu'à la résolution de la requête :
+      // un appel sans délai maximal bloquerait la synchronisation pour de bon.
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (res.status === 401) throw new DriveAuthError();
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -193,6 +202,26 @@ export function createDriveClient(opts: {
     return { sentIds, pendingFileId: created };
   }
 
+  /**
+   * Écarte un carnet illisible en le renommant — rien n'est détruit, et un
+   * carnet neuf sera créé au prochain envoi.
+   */
+  async function repairPending(link: DriveLink): Promise<{ archivedName: string | null }> {
+    let pendingId = link.pendingFileId;
+    if (!pendingId) {
+      const found = await findFileInFolder(link.folderId, PENDING_JOURNAL_NAME);
+      pendingId = found?.id ?? null;
+    }
+    if (!pendingId) return { archivedName: null };
+    const archivedName = "mouvements-pending.illisible-" + new Date().toISOString().slice(0, 10) + ".json";
+    await req(DRIVE + "/files/" + encodeURIComponent(pendingId), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: archivedName }),
+    });
+    return { archivedName };
+  }
+
   return {
     aboutEmail,
     findFolderByName,
@@ -203,6 +232,7 @@ export function createDriveClient(opts: {
     resolveLink,
     readDernier,
     pushPending,
+    repairPending,
   };
 }
 

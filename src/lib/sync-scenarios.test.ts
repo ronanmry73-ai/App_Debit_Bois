@@ -55,7 +55,7 @@ function pendingMove(overrides: Partial<PendingMove> = {}): PendingMove {
 
 /** Serveur Drive minimal : un seul fichier, le carnet des mouvements. */
 function fakeDriveServer(initialPending: string | null) {
-	const state = { pending: initialPending, writes: 0 };
+	const state = { pending: initialPending, writes: 0, renamed: [] as string[] };
 	const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		const method = init?.method ?? "GET";
@@ -72,9 +72,21 @@ function fakeDriveServer(initialPending: string | null) {
 		if (method === "GET" && url.includes("alt=media")) {
 			return new Response(state.pending ?? "", { status: 200 });
 		}
-		if (method === "PATCH") {
+		if (method === "POST") {
+			return new Response(JSON.stringify({ id: "pending-id" }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}
+		if (method === "PATCH" && url.includes("/upload/")) {
 			state.pending = String(init?.body ?? "");
 			state.writes += 1;
+			return new Response("{}", { status: 200 });
+		}
+		if (method === "PATCH") {
+			const body = JSON.parse(String(init?.body ?? "{}")) as { name?: string };
+			state.renamed.push(body.name ?? "");
+			state.pending = null;
 			return new Response("{}", { status: 200 });
 		}
 		return new Response("{}", { status: 200 });
@@ -200,6 +212,21 @@ test("ingestion PC répétée du même carnet : pas de doublon en file", () => {
 	const first = mergePendingMoves([], items);
 	const second = mergePendingMoves(first, items);
 	assert.equal(second.length, 1);
+});
+
+test("SC5b — carnet illisible : la réparation l'écarte et un carnet neuf est créé", async () => {
+	const { state, fetchImpl } = fakeDriveServer("{ ceci n'est pas un carnet");
+	const api = createDriveClient({ accessToken: "jeton", fetchImpl });
+	const local = [pendingMove({ id: "m-1" })];
+	await assert.rejects(() => api.pushPending(LINK, local), /JSON valide/);
+	const { archivedName } = await api.repairPending(LINK);
+	assert.equal(archivedName?.startsWith("mouvements-pending.illisible-"), true);
+	assert.deepEqual(state.renamed, [archivedName]);
+	assert.equal(state.pending, null);
+	const fresh = await api.pushPending({ ...LINK, pendingFileId: null }, local);
+	assert.deepEqual(fresh.sentIds, ["m-1"]);
+	const journal = JSON.parse(String(state.pending)) as { items: PendingMove[] };
+	assert.equal(journal.items.length, 1);
 });
 
 test("SC6 — au-delà de 500 confirmations, un identifiant ancien est évincé (risque résiduel)", () => {

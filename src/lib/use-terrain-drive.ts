@@ -183,6 +183,39 @@ export function useTerrainDrive(opts: {
     }
   }, [opts.enabled, opts.setPendingMoves, setErr, withToken]);
 
+  /** Carnet distant illisible : on l'écarte, puis on repart d'un carnet neuf. */
+  const repairPending = useCallback(async () => {
+    const current = linkRef.current;
+    if (!opts.enabled || !current) return;
+    if (pushLock.current) return pushLock.current;
+    const run = (async () => {
+      setStatus((s) => ({ ...s, pushing: true, error: null }));
+      try {
+        const api = await withToken();
+        const { archivedName } = await api.repairPending(current);
+        const nextLink = { ...current, pendingFileId: null };
+        linkRef.current = nextLink;
+        setLink(nextLink);
+        writeStoredDriveLink(nextLink);
+        onMessageRef.current(
+          archivedName
+            ? "Carnet illisible écarté sous « " + archivedName + " ». Un carnet neuf sera créé au prochain envoi."
+            : "Aucun carnet à réparer. Un carnet neuf sera créé au prochain envoi.",
+        );
+      } catch (err) {
+        setErr(messageOf(err));
+      } finally {
+        setStatus((s) => ({ ...s, pushing: false }));
+      }
+    })();
+    pushLock.current = run;
+    try {
+      await run;
+    } finally {
+      pushLock.current = null;
+    }
+  }, [opts.enabled, setErr, withToken]);
+
   const connect = useCallback(async () => {
     if (!opts.enabled) return;
     if (!googleClientId()) {
@@ -287,6 +320,7 @@ export function useTerrainDrive(opts: {
     disconnect,
     pullDernier,
     pushPending,
+    repairPending,
   };
 }
 
