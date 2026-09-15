@@ -226,6 +226,60 @@ export function mergeAppliedIds(
   return parseAppliedMoveIds([...current, ...ids]);
 }
 
+/**
+ * Accusé de réception : le PC publie dans le miroir les identifiants qu'il a
+ * réellement appliqués (appliedMoveIds). Tant qu'un mouvement n'y figure pas, il
+ * reste dans la file locale et sera repoussé : un envoi réussi ne prouve pas que
+ * le PC l'a lu, ni que Drive l'a rapatrié.
+ *
+ * Retourne la même référence quand rien n'est confirmé, pour ne déclencher ni
+ * rendu ni renvoi inutile.
+ */
+export function acknowledgePendingMoves(
+  pending: PendingMove[],
+  appliedIds: readonly string[],
+): PendingMove[] {
+  if (pending.length === 0 || appliedIds.length === 0) return pending;
+  const confirmed = new Set(appliedIds);
+  const next = pending.filter((move) => !confirmed.has(move.id));
+  return next.length === pending.length ? pending : next;
+}
+
+/**
+ * Prépare l'application d'un carnet côté PC — logique pure et testable.
+ *
+ * Seuls les mouvements réellement appliqués entrent dans appliedMoveIds : un
+ * mouvement dont la référence est introuvable (skipped) est conservé dans
+ * remaining et pourra être rejoué une fois la référence recréée.
+ */
+export function planJournalApplication(
+  stock: StockItem[],
+  moves: StockMove[],
+  pending: PendingMove[],
+  appliedIds: readonly string[],
+): {
+  stock: StockItem[];
+  moves: StockMove[];
+  applied: PendingMove[];
+  skipped: PendingMove[];
+  remaining: PendingMove[];
+  appliedMoveIds: string[];
+} {
+  const queue = filterUnapplied(pending, appliedIds);
+  const { stock: nextStock, applied, skipped } = applyJournal(stock, queue);
+  return {
+    stock: nextStock,
+    moves: movesFromJournal(moves, stock, applied),
+    applied,
+    skipped,
+    remaining: skipped,
+    appliedMoveIds: mergeAppliedIds(
+      appliedIds,
+      applied.map((move) => move.id),
+    ),
+  };
+}
+
 export function applyJournal(
   stock: StockItem[],
   items: PendingMove[],

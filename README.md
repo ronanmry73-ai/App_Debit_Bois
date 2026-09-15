@@ -46,7 +46,9 @@ Variable d’environnement (build Pages, **pas un secret**) :
 
 Sur le téléphone : **Lier Google Drive** (dossier `Sauvegarde Débit Bois ERP`). Stock / plans / devis se lisent dans `debit-bois-dernier.json` (écriture **PC seulement**). Chaque Entrée/Sortie enrichit `mouvements-pending.json`. Sans lien : import / export JSON et **Envoyer le carnet** restent disponibles.
 
-Sur le PC : le bandeau **Appliquer** apparaît au focus, ou **Importer le carnet** à la main.
+Un mouvement n’est retiré du téléphone qu’une fois le carnet appliqué par le PC, puis confirmé dans `debit-bois-dernier.json`. Tant qu’il ne l’est pas, il reste en attente et sera renvoyé : un envoi réussi ne vaut pas preuve d’application.
+
+Sur le PC : le bandeau **Appliquer** apparaît au focus, ou **Importer le carnet** à la main. Un mouvement dont la référence est introuvable reste en attente au lieu d’être ignoré.
 
 ## Déployer sur Vercel
 

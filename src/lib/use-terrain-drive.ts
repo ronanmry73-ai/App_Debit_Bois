@@ -3,7 +3,6 @@ import { createDriveClient, DriveAuthError } from "./google-drive-api.ts";
 import {
   DRIVE_FOLDER_NAME,
   readStoredDriveLink,
-  remainingPendingAfterPush,
   writeStoredDriveLink,
   type DriveLink,
 } from "./google-drive.ts";
@@ -146,14 +145,16 @@ export function useTerrainDrive(opts: {
       setStatus((s) => ({ ...s, pushing: true, error: null }));
       try {
         const api = await withToken();
-        const { sentIds, pendingFileId } = await api.pushPending(current, snapshot);
+        const { pendingFileId } = await api.pushPending(current, snapshot);
         if (pendingFileId && pendingFileId !== current.pendingFileId) {
           const nextLink = { ...current, pendingFileId };
           linkRef.current = nextLink;
           setLink(nextLink);
           writeStoredDriveLink(nextLink);
         }
-        opts.setPendingMoves((prev) => remainingPendingAfterPush(prev, sentIds));
+        // La file locale n'est vidée que sur accusé de réception (appliedMoveIds
+        // publiés dans le miroir par le PC), jamais sur un envoi réussi : sinon un
+        // carnet écrasé côté PC ou non rapatrié par Drive perd le mouvement.
         setStatus((s) => ({
           ...s,
           lastPushAt: new Date().toISOString(),

@@ -106,14 +106,13 @@ import {
   type DriveBackupStatus,
 } from "@/lib/desktop";
 import {
-  applyJournal,
+  acknowledgePendingMoves,
   classifyBridgeFile,
   filterUnapplied,
   isPersistSnapshot,
-  mergeAppliedIds,
   mergePendingMoves,
-  movesFromJournal,
   parseMovementJournal,
+  planJournalApplication,
   PENDING_JOURNAL_HINT,
   PENDING_JOURNAL_NAME,
   PERSIST_AS_JOURNAL_MSG,
@@ -464,6 +463,11 @@ function Home() {
         emptyRow: INITIAL_EMPTY_ROW,
       });
       applyPersisted(saved, false, { keepPendingMoves: true });
+      // Accusé de réception : le PC publie dans le miroir les mouvements qu'il a
+      // réellement appliqués. Un envoi réussi ne prouve pas qu'il les a lus :
+      // tant qu'un mouvement n'est pas confirmé, il reste dans la file locale et
+      // sera repoussé (renvoi sans risque, les identifiants sont stables).
+      setPendingMoves((prev) => acknowledgePendingMoves(prev, saved.appliedMoveIds ?? []));
       setFlash("Stock Drive à jour.");
       return true;
     },
@@ -1152,16 +1156,12 @@ function Home() {
   }
 
   function applyPendingJournal() {
-    const queue = filterUnapplied(pendingMoves, appliedMoveIds);
-    const { stock: next, applied, skipped } = applyJournal(stock, queue);
-    const nextMoves = movesFromJournal(moves, stock, applied);
-    const nextIds = mergeAppliedIds(
-      appliedMoveIds,
-      queue.map((m) => m.id),
-    );
+    const plan = planJournalApplication(stock, moves, pendingMoves, appliedMoveIds);
+    const { stock: next, moves: nextMoves, applied, skipped } = plan;
+    const nextIds = plan.appliedMoveIds;
     setStock(next);
     setMoves(nextMoves);
-    setPendingMoves([]);
+    setPendingMoves(skipped);
     setAppliedMoveIds(nextIds);
     appliedIdsRef.current = nextIds;
     setDriveOrigin(false);
@@ -1169,7 +1169,7 @@ function Home() {
       ...collectPersisted(),
       stock: next,
       moves: nextMoves,
-      pendingMoves: [],
+      pendingMoves: skipped,
       appliedMoveIds: nextIds,
     });
     const api = desktopApi();
@@ -1178,7 +1178,7 @@ function Home() {
     }
     const parts = [`${applied.length} mouvement${applied.length > 1 ? "s" : ""} appliqué${applied.length > 1 ? "s" : ""} au stock.`];
     if (skipped.length > 0) {
-      parts.push(`${skipped.length} ignoré${skipped.length > 1 ? "s" : ""} (référence inconnue).`);
+      parts.push(`${skipped.length} ignoré${skipped.length > 1 ? "s" : ""} — conservé${skipped.length > 1 ? "s" : ""} en attente (référence inconnue).`);
     }
     parts.push("Les projets n’ont pas été modifiés.");
     setFlash(parts.join(" "));

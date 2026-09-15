@@ -74,10 +74,10 @@ export function TerrainStock({
           </p>
           {pending.length > 0 && (
             <p className="mt-3 rounded-lg bg-accent px-3 py-2 text-sm text-accent-foreground">
-              {pending.length} mouvement{pending.length > 1 ? "s" : ""} à envoyer
+              {pending.length} mouvement{pending.length > 1 ? "s" : ""}
               {driveLinked
-                ? " — envoi Drive automatique."
-                : " — Envoyer le carnet (mouvements-pending.json)."}
+                ? " — transmission Drive automatique, en attente d’application à l’atelier."
+                : " à envoyer — Enregistrez le carnet (mouvements-pending.json)."}
             </p>
           )}
           {message && <p className="mt-3 text-sm">{message}</p>}
