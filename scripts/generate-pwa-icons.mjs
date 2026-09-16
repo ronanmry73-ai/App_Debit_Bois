@@ -1,7 +1,26 @@
+/**
+ * Icônes PWA de la marque — peint au pixel, sans dépendance ni navigateur.
+ *
+ * Le repère est celui du favicon 64×64 : deux barres arrondies en croix, quatre
+ * cercles extérieurs, un cercle central, et un masque en étoile à quatre
+ * branches qui évide le centre. Rendu avec un suréchantillonnage 3×3 pour des
+ * bords nets.
+ */
 import { deflateSync } from "node:zlib";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+/** Fond de tuile : le crème de l'application (--color-background). */
+const TILE = [243, 239, 230, 255];
+/** Astre de la marque (le rouge du logo). */
+const MARK = [228, 0, 43, 255];
+/**
+ * Part de la tuile occupée par l'astre. Le manifest déclare l'icône 512 en
+ * `purpose: "maskable"` : Android la rogne en cercle ou en squircle, donc le
+ * repère doit rester dans la zone sûre centrale.
+ */
+const SPAN = 0.78;
 
 function crc32(buf) {
   let c = ~0;
@@ -48,22 +67,66 @@ function png(w, h, paint) {
   ]);
 }
 
+/** Barre à bouts arrondis : capsule quand le rayon vaut la demi-épaisseur. */
+function inRoundedRect(px, py, x, y, w, h, r) {
+  const cx = Math.min(Math.max(px, x + r), x + w - r);
+  const cy = Math.min(Math.max(py, y + r), y + h - r);
+  return (px - cx) ** 2 + (py - cy) ** 2 <= r * r;
+}
+
+function inCircle(px, py, cx, cy, r) {
+  return (px - cx) ** 2 + (py - cy) ** 2 <= r * r;
+}
+
+function inTriangle(px, py, ax, ay, bx, by, cx, cy) {
+  const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by);
+  const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
+  const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(hasNeg && hasPos);
+}
+
+/** L'astre, évidé au centre par le masque en étoile. Coordonnées 64×64. */
+function isMark(x, y) {
+  const inCross =
+    inRoundedRect(x, y, 26.5, 0, 11, 64, 5.5) ||
+    inRoundedRect(x, y, 0, 26.5, 64, 11, 5.5) ||
+    inCircle(x, y, 15, 32, 10) ||
+    inCircle(x, y, 49, 32, 10) ||
+    inCircle(x, y, 32, 15, 10) ||
+    inCircle(x, y, 32, 49, 10) ||
+    inCircle(x, y, 32, 32, 14);
+  if (!inCross) return false;
+  const cut =
+    inTriangle(x, y, 32, 32, 26.5, 20, 37.5, 20) ||
+    inTriangle(x, y, 32, 32, 44, 26.5, 44, 37.5) ||
+    inTriangle(x, y, 32, 32, 37.5, 44, 26.5, 44) ||
+    inTriangle(x, y, 32, 32, 20, 37.5, 20, 26.5);
+  return !cut;
+}
+
 function paintIcon(x, y, w) {
-  const bg = [44, 74, 62, 255];
-  const cream = [244, 241, 234, 255];
-  const wood = [212, 196, 168, 255];
-  const pad = w * 0.175;
-  const barH = w * 0.12;
-  const gap = w * 0.06;
-  const y0 = pad;
-  const y1 = y0 + barH + gap;
-  const y2 = y1 + barH * 1.15 + gap;
-  const inBar = (yy, hh, right) =>
-    x >= pad && x <= w - pad * right && y >= yy && y <= yy + hh;
-  if (inBar(y0, barH, 1)) return cream;
-  if (inBar(y1, barH * 1.15, 1)) return wood;
-  if (inBar(y2, barH * 0.9, 1.8)) return [231, 223, 210, 255];
-  return bg;
+  const scale = w / 64;
+  const SS = 3;
+  let hits = 0;
+  for (let i = 0; i < SS; i++) {
+    for (let j = 0; j < SS; j++) {
+      const px = ((x + (i + 0.5) / SS) / scale - 32) / SPAN + 32;
+      const py = ((y + (j + 0.5) / SS) / scale - 32) / SPAN + 32;
+      if (isMark(px, py)) hits += 1;
+    }
+  }
+  const total = SS * SS;
+  if (hits === 0) return TILE;
+  if (hits === total) return MARK;
+  const a = hits / total;
+  return [
+    Math.round(TILE[0] + (MARK[0] - TILE[0]) * a),
+    Math.round(TILE[1] + (MARK[1] - TILE[1]) * a),
+    Math.round(TILE[2] + (MARK[2] - TILE[2]) * a),
+    255,
+  ];
 }
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public", "icons");
@@ -71,4 +134,4 @@ mkdirSync(dir, { recursive: true });
 for (const size of [192, 512]) {
   writeFileSync(path.join(dir, `icon-${size}.png`), png(size, size, paintIcon));
 }
-console.log("icons 192 et 512 écrits");
+console.log("icons 192 et 512 écrits — astre rouge sur tuile crème");

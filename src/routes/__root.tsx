@@ -25,7 +25,7 @@ export const Route = createRootRoute({
         content:
           "Calculez le nombre de panneaux à acheter à partir d’un débit de pièces, avec plan de découpe, devis et stock atelier.",
       },
-      { name: "theme-color", content: "#2c4a3e" },
+      { name: "theme-color", content: "#190032" },
       { name: "mobile-web-app-capable", content: "yes" },
       { name: "apple-mobile-web-app-capable", content: "yes" },
       { name: "apple-mobile-web-app-title", content: APP_NAME },

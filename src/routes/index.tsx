@@ -2311,17 +2311,13 @@ function Home() {
 
 function Logo() {
   return (
-    <svg
+    <img
+      src="/logo.webp"
       width="40"
       height="40"
-      viewBox="0 0 40 40"
+      alt=""
       aria-hidden
-      className="shrink-0"
-    >
-      <rect width="40" height="40" rx="10" fill="#2c4a3e" />
-      <rect x="7" y="10" width="26" height="6" rx="1.5" fill="#f4f1ea" />
-      <rect x="7" y="18" width="26" height="8" rx="1.5" fill="#d4c4a8" />
-      <rect x="7" y="28" width="16" height="5" rx="1.5" fill="#e7dfd2" />
-    </svg>
+      className="size-10 shrink-0"
+    />
   );
 }

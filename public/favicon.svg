@@ -1,6 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <rect width="16" height="16" rx="3" fill="#2C4A3E"/>
-  <rect x="2" y="3" width="12" height="3" rx="1" fill="#F4F1EA"/>
-  <rect x="2" y="7" width="8" height="3" rx="1" fill="#F4F1EA"/>
-  <rect x="2" y="11" width="5" height="3" rx="1" fill="#F4F1EA"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <mask id="centre">
+    <rect width="64" height="64" fill="#fff"/>
+    <g fill="#000">
+      <polygon points="32,32 26.5,20 37.5,20"/>
+      <polygon points="32,32 44,26.5 44,37.5"/>
+      <polygon points="32,32 37.5,44 26.5,44"/>
+      <polygon points="32,32 20,37.5 20,26.5"/>
+    </g>
+  </mask>
+  <g fill="#e4002b" mask="url(#centre)">
+    <rect x="0" y="26.5" width="64" height="11" rx="5.5"/>
+    <rect x="26.5" y="0" width="11" height="64" rx="5.5"/>
+    <circle cx="15" cy="32" r="10"/>
+    <circle cx="49" cy="32" r="10"/>
+    <circle cx="32" cy="15" r="10"/>
+    <circle cx="32" cy="49" r="10"/>
+    <circle cx="32" cy="32" r="14"/>
+  </g>
 </svg>
