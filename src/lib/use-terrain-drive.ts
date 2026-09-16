@@ -14,6 +14,7 @@ import {
 } from "./google-gis.ts";
 import { isPersistSnapshot } from "./movements.ts";
 import type { PendingMove } from "./movements.ts";
+import { createPushScheduler, type PushScheduler } from "./push-scheduler.ts";
 
 export type TerrainDriveStatus = {
   clientId: string;
@@ -25,6 +26,8 @@ export type TerrainDriveStatus = {
   error: string | null;
   lastPullAt: string | null;
   lastPushAt: string | null;
+  /** Dernier pull non appliqué (R8.3) : un refus ne doit pas rester silencieux. */
+  pullIgnored: string | null;
 };
 
 const emptyStatus = (clientId: string, linked: boolean, email: string | null): TerrainDriveStatus => ({
@@ -37,6 +40,7 @@ const emptyStatus = (clientId: string, linked: boolean, email: string | null): T
   error: null,
   lastPullAt: null,
   lastPushAt: null,
+  pullIgnored: null,
 });
 
 export function useTerrainDrive(opts: {
@@ -65,9 +69,29 @@ export function useTerrainDrive(opts: {
   linkRef.current = link;
   const pushLock = useRef<Promise<void> | null>(null);
   const pullLock = useRef<Promise<void> | null>(null);
+  /** Envoi courant, lu par le planificateur (évite de recréer le minuteur). */
+  const pushRef = useRef<() => Promise<void>>(async () => {});
+  /** Anti-rafale (R8.5) : un seul envoi pour une salve de modifications. */
+  const schedulerRef = useRef<PushScheduler | null>(null);
+  if (schedulerRef.current === null) {
+    schedulerRef.current = createPushScheduler({
+      onPush: () => {
+        void pushRef.current();
+      },
+    });
+  }
 
   const setErr = useCallback((error: string | null) => {
     setStatus((s) => ({ ...s, error }));
+  }, []);
+
+  /**
+   * R8.3 — un pull refusé ne remonte rien aujourd'hui : `onDernier` retourne
+   * toujours `true`, mais un futur refus (stock non appliqué, garde-fou) serait
+   * invisible. On garde donc la trace dans l'état affiché.
+   */
+  const setPullIgnored = useCallback((message: string | null) => {
+    setStatus((s) => ({ ...s, pullIgnored: message }));
   }, []);
 
   const withToken = useCallback(async (forceConsent = false) => {
@@ -107,7 +131,10 @@ export function useTerrainDrive(opts: {
             ...s,
             lastPullAt: new Date().toISOString(),
             error: null,
+            pullIgnored: null,
           }));
+        } else {
+          setPullIgnored("Miroir Drive non appliqué — état local conservé.");
         }
       } catch (err) {
         if (err instanceof DriveAuthError) {
@@ -182,6 +209,7 @@ export function useTerrainDrive(opts: {
       pushLock.current = null;
     }
   }, [opts.enabled, opts.setPendingMoves, setErr, withToken]);
+  pushRef.current = pushPending;
 
   /** Carnet distant illisible : on l'écarte, puis on repart d'un carnet neuf. */
   const repairPending = useCallback(async () => {
@@ -295,10 +323,18 @@ export function useTerrainDrive(opts: {
   }, [opts.enabled, opts.hydrated, link, pullDernier]);
 
   useEffect(() => {
-    if (!opts.enabled || !link) return;
-    if (opts.pendingMoves.length === 0) return;
-    void pushPending();
-  }, [opts.enabled, link, opts.pendingMoves, pushPending]);
+    const scheduler = schedulerRef.current;
+    if (!scheduler) return;
+    if (!opts.enabled || !link || opts.pendingMoves.length === 0) {
+      scheduler.cancel();
+      return;
+    }
+    // R8.5 : une salve de modifications est regroupée en un seul envoi, et deux
+    // envois ne peuvent pas se suivre à moins de PUSH_MIN_INTERVAL_MS. Le
+    // nettoyage annule le minuteur dès que la file change à nouveau.
+    scheduler.schedule();
+    return () => scheduler.cancel();
+  }, [opts.enabled, link, opts.pendingMoves]);
 
   useEffect(() => {
     if (!opts.enabled || !link) return;

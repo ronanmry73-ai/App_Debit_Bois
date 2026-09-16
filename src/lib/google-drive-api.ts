@@ -12,13 +12,46 @@ import {
   pendingJournalBody,
   type DriveLink,
 } from "./google-drive.ts";
-import { PENDING_JOURNAL_NAME, type PendingMove } from "./movements.ts";
+import {
+  isPersistSnapshot,
+  parseMovementJournal,
+  PENDING_JOURNAL_NAME,
+  type PendingMove,
+} from "./movements.ts";
 
 const DRIVE = "https://www.googleapis.com/drive/v3";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
 
 /** Délai maximal d'un appel Drive : sans lui, une requête qui pend fige la synchro. */
 const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Relectures d'un fichier dont le contenu semble tronqué (R4).
+ *
+ * L'API Drive écrit **en place** (`PATCH ?uploadType=media`) : un lecteur peut
+ * tomber sur un fichier partiel. Plutôt que de conclure tout de suite à un
+ * carnet illisible (et de bloquer le push, cf. R5), on relit quelques fois.
+ */
+const READ_ATTEMPTS = 3;
+const READ_RETRY_MS = 150;
+
+/** Un carnet distant est exploitable s'il est vide ou lisible en entier. */
+function isCompleteJournal(raw: string): boolean {
+  return raw.trim() === "" || parseMovementJournal(raw).ok;
+}
+
+/** Un miroir est exploitable s'il est un instantané complet. */
+function isCompleteSnapshot(raw: string): boolean {
+  try {
+    return isPersistSnapshot(JSON.parse(raw));
+  } catch {
+    return false;
+  }
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message.trim() ? err.message : fallback;
+}
 
 export class DriveAuthError extends Error {
   constructor() {
@@ -36,7 +69,7 @@ export class DriveApiError extends Error {
   }
 }
 
-export type DriveFile = { id: string; name: string };
+export type DriveFile = { id: string; name: string; modifiedTime?: string };
 
 type FetchLike = typeof fetch;
 
@@ -66,7 +99,9 @@ export function createDriveClient(opts: {
   }
 
   async function list(q: string): Promise<DriveFile[]> {
-    const url = `${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=20&spaces=drive`;
+    // modifiedTime sert à départager des dossiers homonymes (R8.2) : le plus
+    // récemment modifié est celui que le PC alimente.
+    const url = `${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=20&spaces=drive`;
     const res = await req(url);
     const data = (await res.json()) as { files?: DriveFile[] };
     return Array.isArray(data.files) ? data.files : [];
@@ -93,6 +128,30 @@ export function createDriveClient(opts: {
   async function getMedia(fileId: string): Promise<string> {
     const res = await req(`${DRIVE}/files/${encodeURIComponent(fileId)}?alt=media`);
     return res.text();
+  }
+
+  /** Attente courte entre deux lectures (voir READ_ATTEMPTS). */
+  function readDelay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  /**
+   * Lecture avec réessais : renvoie la dernière version lue, même incomplète —
+   * c'est l'appelant qui décide de refuser (R5) et de proposer la réparation.
+   */
+  async function getMediaTolerant(
+    fileId: string,
+    isComplete: (raw: string) => boolean,
+  ): Promise<string> {
+    let raw = "";
+    for (let attempt = 1; attempt <= READ_ATTEMPTS; attempt += 1) {
+      raw = await getMedia(fileId);
+      if (isComplete(raw)) return raw;
+      if (attempt < READ_ATTEMPTS) await readDelay(READ_RETRY_MS);
+    }
+    return raw;
   }
 
   async function updateMedia(fileId: string, name: string, body: string): Promise<void> {
@@ -136,16 +195,24 @@ export function createDriveClient(opts: {
         `Dossier « ${DRIVE_FOLDER_NAME} » introuvable sur Drive. Vérifie le nom (le PC y écrit déjà).`,
       );
     }
-    let folder = folders[0]!;
-    if (folders.length > 1) {
-      for (const f of folders) {
-        const last = await findFileInFolder(f.id, MIRROR_NAME);
-        if (last) {
-          folder = f;
-          break;
-        }
-      }
+    // R8.2 : ne jamais lier un dossier homonyme au hasard. On ne retient que les
+    // dossiers contenant réellement le miroir ; s'il y en a plusieurs, le plus
+    // récemment modifié gagne. Si aucun ne contient le miroir et qu'il existe
+    // des doublons, on refuse au lieu de lier le mauvais dossier.
+    const withMirror: DriveFile[] = [];
+    for (const f of folders) {
+      const last = await findFileInFolder(f.id, MIRROR_NAME);
+      if (last) withMirror.push(f);
     }
+    if (withMirror.length === 0 && folders.length > 1) {
+      throw new Error(
+        `Plusieurs dossiers « ${DRIVE_FOLDER_NAME} » existent et aucun ne contient ${MIRROR_NAME} — écarte les doublons sur Drive puis réessaie.`,
+      );
+    }
+    const candidates = withMirror.length > 0 ? withMirror : folders;
+    const folder = [...candidates].sort((a, b) =>
+      String(b.modifiedTime ?? "").localeCompare(String(a.modifiedTime ?? "")),
+    )[0]!;
     const last = await findFileInFolder(folder.id, MIRROR_NAME);
     const pending = await findFileInFolder(folder.id, PENDING_JOURNAL_NAME);
     const email = await aboutEmail();
@@ -169,7 +236,7 @@ export function createDriveClient(opts: {
         `${MIRROR_NAME} absent du dossier Drive — enregistre depuis le PC.`,
       );
     }
-    return getMedia(fileId);
+    return getMediaTolerant(fileId, isCompleteSnapshot);
   }
 
   async function pushPending(
@@ -186,9 +253,19 @@ export function createDriveClient(opts: {
       pendingId = found?.id ?? null;
     }
     if (pendingId) {
-      remoteRaw = await getMedia(pendingId);
+      remoteRaw = await getMediaTolerant(pendingId, isCompleteJournal);
     }
-    const { journal, sentIds } = mergeRemoteJournal(remoteRaw, local);
+    let merged: ReturnType<typeof mergeRemoteJournal>;
+    try {
+      merged = mergeRemoteJournal(remoteRaw, local);
+    } catch (err) {
+      // R5 : on refuse toujours d'écraser un carnet inconnu — c'est délibéré —
+      // mais seulement après relecture, et en indiquant la sortie de secours.
+      throw new Error(
+        `${errorMessage(err, "Carnet distant illisible.")} Relu ${READ_ATTEMPTS} fois — utilise « Réparer le carnet » s’il reste illisible.`,
+      );
+    }
+    const { journal, sentIds } = merged;
     const body = pendingJournalBody(journal);
     if (pendingId) {
       await updateMedia(pendingId, PENDING_JOURNAL_NAME, body);

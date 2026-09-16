@@ -52,6 +52,15 @@ Sur le PC : le bandeau **Appliquer** apparaît au focus, ou **Importer le carnet
 
 Sur un écran étroit, l’interface terrain s’active automatiquement. Le bouton **Vue atelier / Vue terrain** de l’en-tête force l’une ou l’autre vue, et **Auto** revient à la détection automatique (`?terrain=1` ou `?terrain=0` dans l’adresse). Le bouton **Lien téléphone**, sur le poste atelier, affiche et copie l’adresse à ouvrir sur le téléphone.
 
+### Fiabilité de la synchronisation
+
+- **Carnet jamais écrasé à l’aveugle** : si un nouveau carnet arrive pendant que le PC applique le précédent, il est conservé tel quel et traité au cycle suivant (les mouvements déjà appliqués sont dédupliqués).
+- **Lectures tolérantes** : Drive écrit les fichiers en place (le `rename` y est peu fiable), donc un fichier lu pendant une écriture est relu au lieu d’être déclaré corrompu. S’il reste illisible, le PC le signale et le téléphone propose **Réparer le carnet**.
+- **Lignes inexploitables annoncées** : une ligne sans référence ou à quantité nulle est comptée et affichée, plus jamais écartée en silence (le fichier brut reste archivé dans `historique/`).
+- **Envois regroupés** : une salve de saisies sur le téléphone produit un seul envoi, espacé d’au moins 5 s du précédent.
+- **Dossiers homonymes** : si plusieurs dossiers `Sauvegarde Débit Bois ERP` existent, seul celui qui contient le miroir est lié ; sinon la liaison est refusée plutôt que choisie au hasard.
+- **Portée Google** : la liaison demande l’accès complet au Drive (`…/auth/drive`), car le dossier et le miroir `debit-bois-dernier.json` sont créés par le PC — l’accès limité aux fichiers créés par l’application ne le permet pas. Le jeton reste en mémoire, expire en ~1 h et est révoqué à la déconnexion.
+
 ## Déployer sur Vercel
 
 Le projet est déjà configuré avec le preset Nitro `vercel`.

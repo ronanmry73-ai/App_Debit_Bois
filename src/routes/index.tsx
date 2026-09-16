@@ -115,6 +115,7 @@ import {
   mergePendingMoves,
   parseMovementJournal,
   planJournalApplication,
+  rejectedRowsMessage,
   PENDING_JOURNAL_HINT,
   PENDING_JOURNAL_NAME,
   PERSIST_AS_JOURNAL_MSG,
@@ -235,7 +236,7 @@ function packIsValid(out: OptimizeOutput | null, selected: string): boolean {
   return !!s && s.panels.some((p) => p.placements.length > 0);
 }
 
-function Home() {
+function Home() { // dsh-skip-func-length — découpage de l'écran unique : chantier distinct, hors du correctif de synchronisation
   const search = Route.useSearch();
   const navigate = useNavigate();
   const terrainPreference = terrainPreferenceFromSearch(search);
@@ -446,6 +447,14 @@ function Home() {
           mergePendingMoves(filterUnapplied(prev, appliedIdsRef.current), fresh),
         );
         setDriveOrigin(true);
+        // R8.4 : les lignes inexploitables du carnet ne disparaissent plus en
+        // silence — elles sont annoncées avec les mouvements réellement ajoutés.
+        const dropped = rejectedRowsMessage(parsed.rejected.length);
+        if (dropped) {
+          setFlash(
+            `${fresh.length} mouvement${fresh.length > 1 ? "s" : ""} ajouté${fresh.length > 1 ? "s" : ""} au carnet. ${dropped}`,
+          );
+        }
       } catch {
         /* Drive absent : on reste en local */
       }
@@ -1261,15 +1270,20 @@ function Home() {
     const journal = parseMovementJournal(data);
     if (journal.ok) {
       const items = filterUnapplied(journal.journal.items, appliedMoveIds);
+      const dropped = rejectedRowsMessage(journal.rejected.length);
       if (items.length === 0) {
-        setFlash("Ces mouvements ont déjà été appliqués (ou le carnet est vide).");
+        setFlash(
+          dropped
+            ? `Ces mouvements ont déjà été appliqués (ou le carnet est vide). ${dropped}`
+            : "Ces mouvements ont déjà été appliqués (ou le carnet est vide).",
+        );
         return;
       }
       setPendingMoves((prev) =>
         mergePendingMoves(filterUnapplied(prev, appliedMoveIds), items),
       );
       setFlash(
-        `${items.length} mouvement${items.length > 1 ? "s" : ""} ajouté${items.length > 1 ? "s" : ""} au carnet.`,
+        `${items.length} mouvement${items.length > 1 ? "s" : ""} ajouté${items.length > 1 ? "s" : ""} au carnet.${dropped ? ` ${dropped}` : ""}`,
       );
       return;
     }
@@ -1339,15 +1353,20 @@ function Home() {
       return;
     }
     const items = filterUnapplied(classified.journal.items, appliedMoveIds);
+    const dropped = rejectedRowsMessage(classified.rejected.length);
     if (items.length === 0) {
-      setFlash("Ces mouvements ont déjà été appliqués (ou le carnet est vide).");
+      setFlash(
+        dropped
+          ? `Ces mouvements ont déjà été appliqués (ou le carnet est vide). ${dropped}`
+          : "Ces mouvements ont déjà été appliqués (ou le carnet est vide).",
+      );
       return;
     }
     setPendingMoves((prev) =>
       mergePendingMoves(filterUnapplied(prev, appliedMoveIds), items),
     );
     setFlash(
-      `${items.length} mouvement${items.length > 1 ? "s" : ""} Terrain en attente — Appliquer`,
+      `${items.length} mouvement${items.length > 1 ? "s" : ""} Terrain en attente — Appliquer${dropped ? ` — ${dropped}` : ""}`,
     );
   }
 

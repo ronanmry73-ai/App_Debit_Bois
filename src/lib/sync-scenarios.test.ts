@@ -14,18 +14,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createDriveClient } from "./google-drive-api.ts";
-import { mergeRemoteJournal, remainingPendingAfterPush } from "./google-drive.ts";
+import { DRIVE_FOLDER_NAME, mergeRemoteJournal, remainingPendingAfterPush } from "./google-drive.ts";
 import {
 	acknowledgePendingMoves,
+	classifyBridgeFile,
 	mergeAppliedIds,
 	mergePendingMoves,
 	PENDING_JOURNAL_NAME,
 	parseMovementJournal,
+	parsePendingMovesDetailed,
 	planJournalApplication,
+	rejectedRowsMessage,
 	serializeMovementJournal,
 	type PendingMove,
 } from "./movements.ts";
 import type { StockItem } from "./stock.ts";
+
+/**
+ * Jeton factice utilisé par tous les tests : aucune valeur réelle, aucun appel
+ * réseau (le transport est remplacé par `fakeDriveServer` / `fetchImpl`).
+ */
+const FAKE_TOKEN = "jeton"; // dsh-skip-residue
 
 function stockItem(overrides: Partial<StockItem> = {}): StockItem {
 	return {
@@ -134,7 +143,7 @@ test("SC1 — hors-ligne puis réseau : retiré de la file seulement après appl
 
 test("SC1b — renvoi répété du même carnet : aucun doublon sur Drive", async () => {
 	const { state, fetchImpl } = fakeDriveServer(serializeMovementJournal([]));
-	const api = createDriveClient({ accessToken: "jeton", fetchImpl });
+	const api = createDriveClient({ accessToken: FAKE_TOKEN, fetchImpl });
 	const local = [pendingMove({ id: "m-1" })];
 	await api.pushPending(LINK, local);
 	await api.pushPending(LINK, local);
@@ -146,7 +155,7 @@ test("SC1b — renvoi répété du même carnet : aucun doublon sur Drive", asyn
 
 test("SC2 — carnet vidé par le PC après l'envoi : le mouvement reste en file et repart", async () => {
 	const { state, fetchImpl } = fakeDriveServer(serializeMovementJournal([]));
-	const api = createDriveClient({ accessToken: "jeton", fetchImpl });
+	const api = createDriveClient({ accessToken: FAKE_TOKEN, fetchImpl });
 	const local = [pendingMove({ id: "m-1" })];
 	const { sentIds } = await api.pushPending(LINK, local);
 	assert.deepEqual(sentIds, ["m-1"]);
@@ -216,7 +225,7 @@ test("ingestion PC répétée du même carnet : pas de doublon en file", () => {
 
 test("SC5b — carnet illisible : la réparation l'écarte et un carnet neuf est créé", async () => {
 	const { state, fetchImpl } = fakeDriveServer("{ ceci n'est pas un carnet");
-	const api = createDriveClient({ accessToken: "jeton", fetchImpl });
+	const api = createDriveClient({ accessToken: FAKE_TOKEN, fetchImpl });
 	const local = [pendingMove({ id: "m-1" })];
 	await assert.rejects(() => api.pushPending(LINK, local), /JSON valide/);
 	const { archivedName } = await api.repairPending(LINK);
@@ -227,6 +236,62 @@ test("SC5b — carnet illisible : la réparation l'écarte et un carnet neuf est
 	assert.deepEqual(fresh.sentIds, ["m-1"]);
 	const journal = JSON.parse(String(state.pending)) as { items: PendingMove[] };
 	assert.equal(journal.items.length, 1);
+});
+
+test("R4 — un carnet distant momentanément tronqué est relu, pas condamné", async () => {
+	const good = serializeMovementJournal([pendingMove({ id: "m-1" })]);
+	const torn = good.slice(0, Math.floor(good.length / 2));
+	let reads = 0;
+	const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = String(input);
+		const method = (init?.method ?? "GET").toUpperCase();
+		if (url.includes("/files?q=")) {
+			return new Response(
+				JSON.stringify({ files: [{ id: "pending-id", name: PENDING_JOURNAL_NAME }] }),
+				{ status: 200 },
+			);
+		}
+		if (method === "GET" && url.includes("alt=media")) {
+			reads += 1;
+			return new Response(reads === 1 ? torn : good, { status: 200 });
+		}
+		if (method === "PATCH") return new Response("{}", { status: 200 });
+		return new Response("{}", { status: 200 });
+	}) as typeof fetch;
+	const api = createDriveClient({ accessToken: FAKE_TOKEN, fetchImpl });
+	const res = await api.pushPending(LINK, [pendingMove({ id: "m-2", delta: -1 })]);
+	assert.equal(reads, 2, "le carnet a été relu après la lecture tronquée");
+	assert.deepEqual(res.sentIds, ["m-2"]);
+});
+
+test("R4/R5 — carnet durablement illisible : refus après relectures, avec la sortie de secours", async () => {
+	let reads = 0;
+	const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = String(input);
+		const method = (init?.method ?? "GET").toUpperCase();
+		if (url.includes("/files?q=")) {
+			return new Response(
+				JSON.stringify({ files: [{ id: "pending-id", name: PENDING_JOURNAL_NAME }] }),
+				{ status: 200 },
+			);
+		}
+		if (method === "GET" && url.includes("alt=media")) {
+			reads += 1;
+			return new Response("{ ceci n'est pas un carnet", { status: 200 });
+		}
+		return new Response("{}", { status: 200 });
+	}) as typeof fetch;
+	const api = createDriveClient({ accessToken: FAKE_TOKEN, fetchImpl });
+	await assert.rejects(
+		() => api.pushPending(LINK, [pendingMove({ id: "m-1" })]),
+		(err: unknown) => {
+			const message = err instanceof Error ? err.message : String(err);
+			assert.match(message, /JSON valide/);
+			assert.match(message, /Réparer le carnet/);
+			return true;
+		},
+	);
+	assert.equal(reads, 3, "trois lectures avant de refuser");
 });
 
 test("SC6 — au-delà de 500 confirmations, un identifiant ancien est évincé (risque résiduel)", () => {
@@ -252,4 +317,109 @@ test("SC6 — au-delà de 500 confirmations, un identifiant ancien est évincé 
 		["m-ancien"],
 	);
 	assert.equal(replay.stock[0]?.qty, 8);
+});
+
+test("R8.4 — une ligne inexploitable est écartée mais tracée, jamais silencieuse", () => {
+	const detailed = parsePendingMovesDetailed([
+		pendingMove({ id: "m-1" }),
+		{ id: "m-vide", refId: "REF-1", delta: 0 },
+		{ id: "m-sans-ref", refId: "", sku: "", delta: -1 },
+		{ id: "m-delta", refId: "REF-1", delta: "beaucoup" },
+		"ligne brute",
+	]);
+	assert.deepEqual(
+		detailed.items.map((m) => m.id),
+		["m-1"],
+	);
+	assert.deepEqual(
+		detailed.rejected.map((r) => [r.index, r.id ?? null]),
+		[
+			[1, "m-vide"],
+			[2, "m-sans-ref"],
+			[3, "m-delta"],
+			[4, null],
+		],
+	);
+	assert.match(detailed.rejected[0]?.reason ?? "", /nulle/);
+});
+
+test("R8.4 — le carnet remonte le décompte jusqu'à l'interface", () => {
+	// isMovementJournal exige une référence et un delta fini sur chaque ligne :
+	// seule une quantité nulle passe ce filtre puis est écartée par la lecture.
+	const raw = {
+		version: 1,
+		createdAt: "2026-09-15T10:00:00.000Z",
+		items: [pendingMove({ id: "m-1" }), { id: "m-vide", refId: "REF-1", delta: 0 }],
+	};
+	const parsed = parseMovementJournal(raw);
+	assert.equal(parsed.ok, true);
+	if (!parsed.ok) return;
+	assert.equal(parsed.rejected.length, 1);
+	assert.deepEqual(
+		parsed.journal.items.map((m) => m.id),
+		["m-1"],
+	);
+	assert.equal(
+		rejectedRowsMessage(parsed.rejected.length),
+		"1 ligne écartée (référence ou quantité inexploitable).",
+	);
+	assert.equal(rejectedRowsMessage(3), "3 lignes écartées (référence ou quantité inexploitable).");
+	assert.equal(rejectedRowsMessage(0), "");
+
+	// Même décompte via la classification du fichier pont (import manuel).
+	const classified = classifyBridgeFile(raw);
+	assert.equal(classified.kind, "journal");
+	if (classified.kind !== "journal") return;
+	assert.equal(classified.rejected.length, 1);
+
+	// Écriture : une quantité nulle n'est jamais sérialisée (comportement conservé).
+	const written = JSON.parse(serializeMovementJournal([
+		pendingMove({ id: "m-1" }),
+		{ id: "m-vide", refId: "REF-1", delta: 0 } as PendingMove,
+	])) as { items: PendingMove[] };
+	assert.deepEqual(
+		written.items.map((m) => m.id),
+		["m-1"],
+	);
+});
+
+test("R8.2 — dossiers homonymes : le miroir départage, sinon on refuse de lier", async () => {
+	const folders = [
+		{ id: "fld-old", name: DRIVE_FOLDER_NAME, modifiedTime: "2026-09-01T10:00:00.000Z" },
+		{ id: "fld-new", name: DRIVE_FOLDER_NAME, modifiedTime: "2026-09-14T10:00:00.000Z" },
+	];
+	const withMirror = (ids: string[]) =>
+		createDriveClient({
+			accessToken: FAKE_TOKEN,
+			fetchImpl: (async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url.includes("/about")) {
+					return new Response(JSON.stringify({ user: { emailAddress: "atelier@example.com" } }), {
+						status: 200,
+					});
+				}
+				if (url.includes("mimeType")) {
+					return new Response(JSON.stringify({ files: folders }), { status: 200 });
+				}
+				if (url.includes(encodeURIComponent("debit-bois-dernier.json"))) {
+					const folder = folders.find((f) => url.includes(f.id));
+					const hit = folder && ids.includes(folder.id);
+					return new Response(
+						JSON.stringify({
+							files: hit ? [{ id: `miroir-${folder.id}`, name: "debit-bois-dernier.json" }] : [],
+						}),
+						{ status: 200 },
+					);
+				}
+				return new Response(JSON.stringify({ files: [] }), { status: 200 });
+			}) as typeof fetch,
+		});
+
+	// Les deux dossiers contiennent un miroir : le plus récent gagne.
+	const link = await withMirror(["fld-old", "fld-new"]).resolveLink();
+	assert.equal(link.folderId, "fld-new");
+	assert.equal(link.lastFileId, "miroir-fld-new");
+
+	// Aucun ne contient le miroir : on refuse au lieu de lier au hasard.
+	await assert.rejects(() => withMirror([]).resolveLink(), /aucun ne contient/);
 });

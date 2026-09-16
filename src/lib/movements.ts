@@ -43,28 +43,91 @@ export function stockRefKey(item: Pick<StockItem, "id" | "refId">): string {
   return ref || item.id;
 }
 
-export function parsePendingMoves(raw: unknown): PendingMove[] {
-  if (!Array.isArray(raw)) return [];
-  const out: PendingMove[] = [];
-  for (const row of raw) {
-    if (!row || typeof row !== "object") continue;
+/**
+ * Ligne de carnet écartée à la lecture (R8.4) : elle est désormais **tracée**
+ * au lieu de disparaître en silence — le fichier brut reste de toute façon
+ * archivé dans `historique/`, mais l'utilisateur doit savoir combien de lignes
+ * ont été laissées de côté et pourquoi.
+ */
+export type RejectedMoveRow = {
+  /** Position dans le tableau d'origine (0 = première ligne). */
+  index: number;
+  /** Motif lisible, affiché tel quel par l'interface. */
+  reason: string;
+  /** Identifiant de la ligne quand il est exploitable. */
+  id?: string;
+};
+
+export const REJECT_ROW_NOT_OBJECT = "ligne illisible (objet attendu)";
+export const REJECT_ROW_NO_REF = "référence manquante (refId / sku)";
+export const REJECT_ROW_BAD_DELTA = "quantité illisible (delta non numérique)";
+export const REJECT_ROW_ZERO_DELTA = "quantité nulle (delta = 0)";
+
+/**
+ * Message utilisateur commun aux lignes écartées (R8.4) : l'interface doit dire
+ * combien de lignes ont été laissées de côté, jamais les taire.
+ */
+export function rejectedRowsMessage(count: number): string {
+  if (!Number.isFinite(count) || count <= 0) return "";
+  const plural = count > 1 ? "s" : "";
+  return `${count} ligne${plural} écartée${plural} (référence ou quantité inexploitable).`;
+}
+
+function rejectedRow(
+  index: number,
+  reason: string,
+  id?: string,
+): RejectedMoveRow {
+  return id ? { index, reason, id } : { index, reason };
+}
+
+/** Lecture détaillée : mouvements retenus **et** lignes écartées avec leur motif. */
+export function parsePendingMovesDetailed(raw: unknown): {
+  items: PendingMove[];
+  rejected: RejectedMoveRow[];
+} {
+  if (!Array.isArray(raw)) return { items: [], rejected: [] };
+  const items: PendingMove[] = [];
+  const rejected: RejectedMoveRow[] = [];
+  raw.forEach((row, index) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      rejected.push(rejectedRow(index, REJECT_ROW_NOT_OBJECT));
+      return;
+    }
     const o = row as Record<string, unknown>;
+    const rawId = typeof o.id === "string" && o.id.trim() ? o.id.trim() : undefined;
     const delta = Number(o.delta);
     const sku = typeof o.sku === "string" ? o.sku.trim() : "";
     const refId = typeof o.refId === "string" ? o.refId.trim() : "";
     const key = refId || sku;
-    if (!key || !Number.isFinite(delta) || delta === 0) continue;
+    if (!key) {
+      rejected.push(rejectedRow(index, REJECT_ROW_NO_REF, rawId));
+      return;
+    }
+    if (!Number.isFinite(delta)) {
+      rejected.push(rejectedRow(index, REJECT_ROW_BAD_DELTA, rawId));
+      return;
+    }
+    if (delta === 0) {
+      rejected.push(rejectedRow(index, REJECT_ROW_ZERO_DELTA, rawId));
+      return;
+    }
     const move: PendingMove = {
-      id: typeof o.id === "string" && o.id.trim() ? o.id : newId(),
-      at: typeof o.at === "string" && o.at.trim() ? o.at : new Date().toISOString(),
+      id: rawId ?? newId(),
+      at: typeof o.at === "string" && o.at.trim() ? o.at.trim() : new Date().toISOString(),
       refId: key,
       delta,
       reason: typeof o.reason === "string" ? o.reason.trim() : "",
     };
     if (sku) move.sku = sku;
-    out.push(move);
-  }
-  return out;
+    items.push(move);
+  });
+  return { items, rejected };
+}
+
+/** Raccourci historique : ne renvoie que les mouvements exploitables. */
+export function parsePendingMoves(raw: unknown): PendingMove[] {
+  return parsePendingMovesDetailed(raw).items;
 }
 
 export function isMovementJournal(raw: unknown): raw is MovementJournal {
@@ -84,7 +147,9 @@ export function isMovementJournal(raw: unknown): raw is MovementJournal {
 
 export function parseMovementJournal(
   raw: string | unknown,
-): { ok: true; journal: MovementJournal } | { ok: false; error: string } {
+):
+  | { ok: true; journal: MovementJournal; rejected: RejectedMoveRow[] }
+  | { ok: false; error: string } {
   let data: unknown = raw;
   if (typeof raw === "string") {
     try {
@@ -99,7 +164,7 @@ export function parseMovementJournal(
   if (!isMovementJournal(data)) {
     return { ok: false, error: "Ce fichier n’est pas un carnet de mouvements." };
   }
-  const items = parsePendingMoves(data.items);
+  const { items, rejected } = parsePendingMovesDetailed(data.items);
   return {
     ok: true,
     journal: {
@@ -110,6 +175,7 @@ export function parseMovementJournal(
           : new Date().toISOString(),
       items,
     },
+    rejected,
   };
 }
 
@@ -138,14 +204,16 @@ export function isPersistSnapshot(raw: unknown): boolean {
 }
 
 export type BridgeFile =
-  | { kind: "journal"; journal: MovementJournal }
+  | { kind: "journal"; journal: MovementJournal; rejected: RejectedMoveRow[] }
   | { kind: "persist" }
   | { kind: "invalid"; error: string };
 
 export function classifyBridgeFile(raw: unknown): BridgeFile {
   if (isPersistSnapshot(raw)) return { kind: "persist" };
   const parsed = parseMovementJournal(raw);
-  if (parsed.ok) return { kind: "journal", journal: parsed.journal };
+  if (parsed.ok) {
+    return { kind: "journal", journal: parsed.journal, rejected: parsed.rejected };
+  }
   return { kind: "invalid", error: parsed.error };
 }
 

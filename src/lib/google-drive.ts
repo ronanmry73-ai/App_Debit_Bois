@@ -21,6 +21,20 @@ export const DRIVE_FOLDER_NAME = "Sauvegarde Débit Bois ERP";
 export const MIRROR_NAME = "debit-bois-dernier.json";
 export const DRIVE_LINK_KEY = "debit-bois-drive-link";
 
+/**
+ * Portée OAuth **complète** (`auth/drive`), assumée explicitement (R8.1).
+ *
+ * `drive.file` (accès limité aux fichiers créés par l'application) serait
+ * préférable, mais il est inutilisable ici : le miroir `debit-bois-dernier.json`
+ * et le dossier « Sauvegarde Débit Bois ERP » sont **créés par le PC**, pas par
+ * cette application web. Le téléphone doit donc lire/écrire des fichiers qu'il
+ * n'a pas créés, ce que `drive.file` interdit.
+ *
+ * Conséquence à assumer : un jeton d'accès qui fuite donne accès à **tout** le
+ * Drive du compte. Mitigations en place : jeton uniquement en mémoire (jamais
+ * persisté), durée de vie courte (~1 h), révocation à la déconnexion
+ * (`revokeAccessToken()`), et client ID public sans secret.
+ */
 export const GOOGLE_DRIVE_SCOPES = "https://www.googleapis.com/auth/drive";
 
 /** Fichiers que le téléphone a le droit d’écrire. Uniquement le carnet. */

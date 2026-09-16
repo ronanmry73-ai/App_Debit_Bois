@@ -116,3 +116,67 @@ test("R4b — atomicWriteFile écrit directement la destination, sans fichier te
 	assert.equal(await readFile(dest, "utf8"), "{}");
 	assert.deepEqual(await readdir(dir), ["debit-bois-dernier.json"]);
 });
+
+test("R4c — écriture en cours : une lecture tronquée est relue, pas condamnée", async () => {
+	resetDriveBackupState();
+	const dir = await tempDir();
+	const file = path.join(dir, PENDING_JOURNAL_NAME);
+	await writeFile(file, JOURNAL.slice(0, 40), "utf8");
+	// Le fichier se complète juste après la première lecture (Drive Desktop).
+	const heal = setTimeout(() => {
+		void writeFile(file, JOURNAL, "utf8");
+	}, 60);
+	const res = await readPendingJournalFile(dir, { attempts: 3, delayMs: 150 });
+	clearTimeout(heal);
+	assert.equal(res.valid, true);
+	assert.ok(res.attempts >= 2, `essais : ${res.attempts}`);
+	assert.equal(res.raw, JOURNAL);
+});
+
+test("R4d — archivage refusé si le carnet a changé depuis la lecture", async () => {
+	resetDriveBackupState();
+	const dir = await tempDir();
+	const file = path.join(dir, PENDING_JOURNAL_NAME);
+	await writeFile(file, JOURNAL, "utf8");
+	const res = await readPendingJournalFile(dir);
+	assert.equal(res.valid, true);
+	// Le téléphone pousse un nouveau carnet pendant l'application côté PC.
+	const next = JSON.stringify(
+		{
+			version: 1,
+			createdAt: "2026-09-15T12:00:00.000Z",
+			items: [
+				{ id: "m-2", at: "2026-09-15T12:00:00.000Z", refId: "REF-1", delta: -1, reason: "Sortie" },
+			],
+		},
+		null,
+		2,
+	);
+	await writeFile(file, next, "utf8");
+	const archived = await archivePendingJournalFile({
+		dir,
+		now: new Date("2026-09-15T12:05:00.000Z"),
+	});
+	assert.equal(archived.ok, true);
+	assert.equal(archived.changed, true);
+	assert.equal(archived.archived, null);
+	// Rien n'est perdu : le carnet du téléphone est intact, aucun archivage n'a eu lieu.
+	assert.equal(await readFile(file, "utf8"), next);
+	const hist = await readdir(path.join(dir, "historique")).catch(() => []);
+	assert.deepEqual(hist, []);
+});
+
+test("R4e — archivage normal : contenu inchangé → archivé puis vidé", async () => {
+	resetDriveBackupState();
+	const dir = await tempDir();
+	const file = path.join(dir, PENDING_JOURNAL_NAME);
+	await writeFile(file, JOURNAL, "utf8");
+	const res = await readPendingJournalFile(dir);
+	assert.equal(res.valid, true);
+	const now = new Date("2026-09-15T13:00:00.000Z");
+	const archived = await archivePendingJournalFile({ dir, now });
+	assert.equal(archived.ok, true);
+	assert.equal(archived.changed, false);
+	assert.ok(archived.archived);
+	assert.equal(await readFile(file, "utf8"), emptyPendingJournalJson(now));
+});

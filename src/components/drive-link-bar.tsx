@@ -67,6 +67,13 @@ export function DriveLinkBar({
           </Button>
         )}
       </div>
+      {!status.linked && (
+        <p className="text-xs text-muted-foreground">
+          Le téléphone demande un accès complet au Drive : le dossier et le miroir
+          sont créés par le PC, ce que l’accès limité aux fichiers créés par
+          l’application ne permet pas.
+        </p>
+      )}
       {pendingCount > 0 && (
         <p className="text-sm text-accent-foreground">
           {pendingCount} mouvement{pendingCount > 1 ? "s" : ""}
@@ -86,8 +93,11 @@ export function DriveLinkBar({
           </Button>
         </div>
       )}
-      {status.pulling && !status.error && (
+      {status.pulling && !status.error && !status.pullIgnored && (
         <p className="text-xs text-muted-foreground">Lecture stock Drive…</p>
+      )}
+      {status.pullIgnored && !status.error && (
+        <p className="text-xs text-muted-foreground">{status.pullIgnored}</p>
       )}
       <ConfirmDialog
         open={confirmDisconnect}

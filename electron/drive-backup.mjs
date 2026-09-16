@@ -4,7 +4,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const DEFAULT_DRIVE_BACKUP_DIR =
@@ -21,10 +21,19 @@ export const HISTORY_NAME_RE =
 let lastSnapshotAt = 0;
 /** @type {string | null} */
 let lastResolvedDir = null;
+/**
+ * Contenu du carnet lu lors de la dernière lecture réussie (R4).
+ * Sert de « compare-and-swap » à l'archivage : si le fichier ne contient plus
+ * ce que l'on vient d'appliquer, c'est que le téléphone a poussé un nouveau
+ * carnet entre-temps — on ne l'écrase donc pas.
+ * @type {string | null}
+ */
+let lastReadRaw = null;
 
 export function resetDriveBackupState() {
   lastSnapshotAt = 0;
   lastResolvedDir = null;
+  lastReadRaw = null;
 }
 
 export function lastKnownBackupDir() {
@@ -96,12 +105,24 @@ export function resolveBackupDir(json) {
 }
 
 /**
- * Écriture directe. Drive Desktop refuse souvent rename(fichier.tmp → .json)
- * et laisse le dossier vide.
+ * Écriture directe — **volontairement non atomique** (R4).
+ *
+ * Drive Desktop refuse souvent `rename(fichier.tmp → .json)` et laisse alors le
+ * dossier vide : le nom `atomicWriteFile` est historique et trompeur, il n'y a
+ * pas d'atomicité. On compense ailleurs :
+ *   - les lecteurs relisent après un court délai (`readJsonFileTolerant`) ;
+ *   - l'archivage ne vide le carnet que s'il n'a pas changé (`lastReadRaw`).
+ *
+ * Le contrôle de taille final évite de laisser un fichier vidé par une écriture
+ * interrompue : mieux vaut signaler l'échec que publier un fichier vide.
  */
 export async function atomicWriteFile(dest, content) {
   await mkdir(path.dirname(dest), { recursive: true });
   await writeFile(dest, content, "utf8");
+  const info = await stat(dest);
+  if (info.size === 0 && String(content).length > 0) {
+    throw new Error(`écriture incomplète (${dest})`);
+  }
 }
 
 async function newestHistoryMs(historyDir) {
@@ -215,35 +236,128 @@ export function emptyPendingJournalJson(now = new Date()) {
   );
 }
 
+/** Attente courte, sans bloquer la boucle d'événements. */
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Un JSON complet est-il lisible ? (un fichier tronqué ne l'est pas) */
+export function isParsableJson(raw) {
+  try {
+    JSON.parse(String(raw));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Lecture tolérante à une écriture en cours (R4).
+ *
+ * L'écriture se fait en place : un lecteur concurrent peut tomber sur un JSON
+ * tronqué. On relit alors après un court délai — le temps que Drive Desktop
+ * finisse d'écrire — au lieu de conclure tout de suite à un fichier corrompu.
+ * La dernière lecture est retournée telle quelle : l'appelant garde le dernier
+ * mot (refus net et message explicite), on ne masque jamais un vrai fichier
+ * illisible.
+ *
+ * @param {string} file
+ * @param {{ attempts?: number, delayMs?: number, isValid?: (raw: string) => boolean }} [opts]
+ */
+export async function readJsonFileTolerant(file, opts = {}) {
+  const attempts = Math.max(1, Number(opts.attempts) || 3);
+  const delayMs = Math.max(0, Number(opts.delayMs) ?? 200);
+  const isValid = opts.isValid ?? isParsableJson;
+  let raw = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    raw = await readFile(file, "utf8");
+    if (isValid(raw)) return { raw, attempts: attempt, valid: true };
+    if (attempt < attempts) await delay(delayMs);
+  }
+  return { raw, attempts, valid: false };
+}
+
 /**
  * Lecture seule du carnet téléphone. Ne touche jamais debit-bois-dernier.json.
+ *
+ * Relit si le contenu est tronqué (`valid: false` après épuisement des essais) :
+ * l'appelant peut alors parler d'« écriture en cours » plutôt que de corruption.
+ *
  * @param {string} [dir]
+ * @param {{ attempts?: number, delayMs?: number }} [opts]
  */
-export async function readPendingJournalFile(dir = lastKnownBackupDir()) {
+export async function readPendingJournalFile(dir = lastKnownBackupDir(), opts = {}) {
   const folder = dir || DEFAULT_DRIVE_BACKUP_DIR;
   const file = path.join(folder, PENDING_JOURNAL_NAME);
   if (!driveLocationAvailable(folder)) {
-    return { ok: false, raw: null, missing: true, path: file, error: "Drive indisponible" };
+    return {
+      ok: false,
+      raw: null,
+      missing: true,
+      path: file,
+      error: "Drive indisponible",
+      attempts: 0,
+      valid: true,
+    };
   }
   if (!existsSync(file)) {
-    return { ok: true, raw: null, missing: true, path: file, error: null };
+    lastReadRaw = null;
+    return {
+      ok: true,
+      raw: null,
+      missing: true,
+      path: file,
+      error: null,
+      attempts: 0,
+      valid: true,
+    };
   }
   try {
-    const raw = await readFile(file, "utf8");
-    return { ok: true, raw, missing: false, path: file, error: null };
+    const read = await readJsonFileTolerant(file, opts);
+    lastReadRaw = read.valid ? read.raw : null;
+    if (!read.valid) {
+      console.warn(
+        `[Débit Bois] Carnet Drive illisible après ${read.attempts} lecture(s) — écriture en cours ?`,
+      );
+    }
+    return {
+      ok: true,
+      raw: read.raw,
+      missing: false,
+      path: file,
+      error: null,
+      attempts: read.attempts,
+      valid: read.valid,
+    };
   } catch (err) {
     const message =
       err && typeof err === "object" && "message" in err
         ? String(err.message)
         : String(err);
     console.warn("[Débit Bois] Lecture carnet Drive impossible :", message);
-    return { ok: false, raw: null, missing: false, path: file, error: "Drive indisponible" };
+    return {
+      ok: false,
+      raw: null,
+      missing: false,
+      path: file,
+      error: "Drive indisponible",
+      attempts: 0,
+      valid: true,
+    };
   }
 }
 
 /**
  * Copie le carnet vers historique/ puis laisse un fichier vide.
  * Pas de rename() : Drive Desktop le casse souvent.
+ *
+ * Garde anti-écrasement (R4) : le carnet n'est vidé que si son contenu est
+ * encore celui qui a été lu pour appliquer les mouvements. Si le téléphone a
+ * poussé un nouveau carnet entre-temps, on le laisse intact (`changed: true`) —
+ * il sera appliqué au cycle suivant, et les identifiants déjà appliqués sont
+ * dédupliqués par `appliedMoveIds`. Sans cette garde, l'écriture non atomique
+ * transformait une course en perte silencieuse.
+ *
  * @param {{ dir?: string, now?: Date }} [opts]
  */
 export async function archivePendingJournalFile(opts = {}) {
@@ -251,7 +365,7 @@ export async function archivePendingJournalFile(opts = {}) {
   const folder = opts.dir || lastKnownBackupDir() || DEFAULT_DRIVE_BACKUP_DIR;
   const src = path.join(folder, PENDING_JOURNAL_NAME);
   if (!driveLocationAvailable(folder)) {
-    return { ok: false, path: src, archived: null, error: "Drive indisponible" };
+    return { ok: false, path: src, archived: null, changed: false, error: "Drive indisponible" };
   }
   try {
     const historyDir = path.join(folder, HISTORY_DIR_NAME);
@@ -264,6 +378,12 @@ export async function archivePendingJournalFile(opts = {}) {
         previous = "";
       }
     }
+    if (lastReadRaw !== null && previous !== lastReadRaw) {
+      console.warn(
+        "[Débit Bois] Carnet Drive modifié pendant l'application — conservé tel quel.",
+      );
+      return { ok: true, path: src, archived: null, changed: true, error: null };
+    }
     let archived = null;
     if (previous.trim()) {
       archived = path.join(
@@ -273,14 +393,15 @@ export async function archivePendingJournalFile(opts = {}) {
       await atomicWriteFile(archived, previous);
     }
     await atomicWriteFile(src, emptyPendingJournalJson(now));
-    return { ok: true, path: src, archived, error: null };
+    lastReadRaw = null;
+    return { ok: true, path: src, archived, changed: false, error: null };
   } catch (err) {
     const message =
       err && typeof err === "object" && "message" in err
         ? String(err.message)
         : String(err);
     console.warn("[Débit Bois] Archive carnet Drive impossible :", message);
-    return { ok: false, path: src, archived: null, error: "Drive indisponible" };
+    return { ok: false, path: src, archived: null, changed: false, error: "Drive indisponible" };
   }
 }
 
