@@ -12,6 +12,13 @@ import { newId } from "./utils.ts";
 
 export const PROJECT_FILE_VERSION = 1;
 
+/**
+ * État de vie du chantier — à ne pas confondre avec le statut métier dérivé
+ * (`deriveJobStatus` : brouillon → calepiné → stock déduit → devis émis), qui
+ * décrit l'avancement du dossier, pas la fin du chantier.
+ */
+export type ProjectStatus = "en_cours" | "termine";
+
 export type Project = {
   id: string;
   name: string;
@@ -20,6 +27,12 @@ export type Project = {
   notes: string;
   createdAt: string;
   updatedAt: string;
+  /** État de vie : absent = « en cours » (rétrocompatible avec les projets existants). */
+  status?: ProjectStatus;
+  /** Date de clôture du chantier (ISO). */
+  finishedAt?: string;
+  /** Remarque de clôture, facultative. */
+  finishedNote?: string;
   rows: PieceRow[];
   settings: AppSettings;
   /** Conservé pour les anciens fichiers, ignoré à l’ouverture. */
@@ -43,6 +56,8 @@ export type ProjectSummary = {
   clientName: string;
   updatedAt: string;
   createdAt: string;
+  status: ProjectStatus;
+  finishedAt?: string;
 };
 
 export function emptyProjectMeta(): Pick<
@@ -50,6 +65,75 @@ export function emptyProjectMeta(): Pick<
   "name" | "description" | "clientName" | "notes"
 > {
   return { name: "", description: "", clientName: "", notes: "" };
+}
+
+/** Normalise un état de vie venu d'un fichier ou d'un formulaire. */
+function normalizeStatus(value: unknown): ProjectStatus | undefined {
+  return value === "termine" ? "termine" : value === "en_cours" ? "en_cours" : undefined;
+}
+
+/** État de vie du chantier : absence de champ = « en cours ». */
+export function projectStatus(p: Pick<Project, "status">): ProjectStatus {
+  return p.status === "termine" ? "termine" : "en_cours";
+}
+
+export function isProjectFinished(p: Pick<Project, "status">): boolean {
+  return projectStatus(p) === "termine";
+}
+
+/** Libellé d'état, prêt à afficher : « En cours » / « Terminé le 12/08/2026 ». */
+export function projectStatusLabel(
+  p: Pick<Project, "status" | "finishedAt">,
+): string {
+  if (!isProjectFinished(p)) return "En cours";
+  const day = formatDay(p.finishedAt);
+  return day ? `Terminé le ${day}` : "Terminé";
+}
+
+/**
+ * Clôture le chantier. On **marque**, on ne verrouille rien : le projet reste
+ * ouvrable et modifiable, et se rouvre explicitement (`reopenProject`).
+ * Un chantier se rouvre souvent (reprise, SAV), donc pas de verrou.
+ */
+export function finishProject(
+  project: Project,
+  opts: { at?: string; note?: string } = {},
+): Project {
+  const at =
+    typeof opts.at === "string" && opts.at.trim()
+      ? opts.at
+      : new Date().toISOString();
+  const note = typeof opts.note === "string" ? opts.note.trim() : "";
+  return {
+    ...project,
+    status: "termine",
+    finishedAt: at,
+    finishedNote: note || undefined,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/** Rouvre un chantier : il repart « en cours », la clôture est effacée. */
+export function reopenProject(project: Project): Project {
+  const next: Project = {
+    ...project,
+    status: "en_cours",
+    updatedAt: new Date().toISOString(),
+  };
+  delete next.finishedAt;
+  delete next.finishedNote;
+  return next;
+}
+
+/** Répartition des chantiers par état, pour l'écran d'historique. */
+export function countProjectsByStatus(projects: Project[]): {
+  enCours: number;
+  termines: number;
+  total: number;
+} {
+  let termines = 0;
+  for (const p of projects) if (isProjectFinished(p)) termines += 1;
+  return { enCours: projects.length - termines, termines, total: projects.length };
 }
 
 export function snapshotProject(input: {
@@ -68,6 +152,9 @@ export function snapshotProject(input: {
   calculatedAt?: string | null;
   stockDeductedAt?: string | null;
   quoteIssuedAt?: string | null;
+  status?: ProjectStatus | null;
+  finishedAt?: string | null;
+  finishedNote?: string | null;
 }): Project {
   const t = new Date().toISOString();
   const stockDeductedAt =
@@ -80,6 +167,15 @@ export function snapshotProject(input: {
     notes: input.notes,
     createdAt: input.createdAt ?? t,
     updatedAt: t,
+    status: normalizeStatus(input.status),
+    finishedAt:
+      typeof input.finishedAt === "string" && input.finishedAt.trim()
+        ? input.finishedAt
+        : undefined,
+    finishedNote:
+      typeof input.finishedNote === "string" && input.finishedNote.trim()
+        ? input.finishedNote.trim()
+        : undefined,
     rows: input.rows.map((r) => migratePieceRow(r)),
     settings: input.settings,
     selectedStrategy: input.selectedStrategy,
@@ -105,6 +201,10 @@ export function duplicateProject(project: Project, name?: string): Project {
     stockDeductedAt: undefined,
     quoteIssuedAt: undefined,
     calculatedAt: undefined,
+    // Une copie est un nouveau chantier : elle repart « en cours ».
+    status: "en_cours",
+    finishedAt: undefined,
+    finishedNote: undefined,
   };
 }
 
@@ -115,6 +215,8 @@ export function summarize(p: Project): ProjectSummary {
     clientName: p.clientName,
     updatedAt: p.updatedAt,
     createdAt: p.createdAt,
+    status: projectStatus(p),
+    finishedAt: p.finishedAt,
   };
 }
 
@@ -204,6 +306,15 @@ export function migrateProject(project: Project): Project {
   return {
     ...project,
     rows: migratePieceRows(project.rows),
+    status: normalizeStatus(project.status),
+    finishedAt:
+      typeof project.finishedAt === "string" && project.finishedAt.trim()
+        ? project.finishedAt
+        : undefined,
+    finishedNote:
+      typeof project.finishedNote === "string" && project.finishedNote.trim()
+        ? project.finishedNote.trim()
+        : undefined,
     calculatedAt,
     stockDeductedAt,
     quoteIssuedAt:

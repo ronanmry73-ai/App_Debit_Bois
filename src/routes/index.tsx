@@ -26,12 +26,14 @@ import { ViewModeToggle } from "@/components/view-mode-toggle";
 import { DriveLinkBar } from "@/components/drive-link-bar";
 import { CatalogPanel } from "@/components/catalog-panel";
 import { ProjectsBar } from "@/components/projects-bar";
+import { ProjectsHistory } from "@/components/projects-history";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { JobNeedPanel } from "@/components/job-need-panel";
 import { SupplierCostPanel } from "@/components/supplier-cost-panel";
 import { AtelierSheet } from "@/components/atelier-sheet";
 import { HardwareList } from "@/components/hardware-list";
 import { JobStatusBadge } from "@/components/job-status-badge";
+import { ChantierStatusBadge } from "@/components/chantier-status-badge";
 import {
   optimizeCutting,
   refreshStrategyMetrics,
@@ -77,6 +79,9 @@ import {
 } from "@/lib/catalog";
 import {
   duplicateProject,
+  finishProject,
+  isProjectFinished,
+  reopenProject,
   findProjectByName,
   parseImportedProject,
   serializeProject,
@@ -255,6 +260,9 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [projectMeta, setProjectMeta] = useState<ProjectMeta>(emptyMeta);
+  /** Écran « Historique des chantiers » + chantier à clôturer en arrivant. */
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyFinishId, setHistoryFinishId] = useState<string | null>(null);
   const [usedRefIds, setUsedRefIds] = useState<string[]>([]);
   const [stockDeduction, setStockDeduction] = useState<StockDeduction | null>(null);
   const [savedFp, setSavedFp] = useState("");
@@ -1003,6 +1011,9 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
 
   function collectProject(name: string, id?: string, createdAt?: string): Project {
     const clientName = projectMeta.clientName || settings.clientName;
+    // L'état de vie du chantier survit à un enregistrement : sans ça, une simple
+    // sauvegarde après clôture effacerait la date de fin.
+    const existing = id ? projects.find((p) => p.id === id) : undefined;
     return snapshotProject({
       id,
       createdAt,
@@ -1019,6 +1030,9 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
       calculatedAt,
       stockDeductedAt: stockDeduction?.date ?? null,
       quoteIssuedAt,
+      status: existing?.status ?? null,
+      finishedAt: existing?.finishedAt ?? null,
+      finishedNote: existing?.finishedNote ?? null,
     });
   }
 
@@ -1093,6 +1107,37 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
       return false;
     }
     return saveNamed(projectMeta.name, false);
+  }
+
+  /**
+   * Clôture d'un chantier : on marque, on ne verrouille rien. Le projet reste
+   * ouvrable, et se rouvre depuis l'écran d'historique.
+   */
+  function finishChantier(id: string, opts: { at: string; note: string }) {
+    const target = projects.find((p) => p.id === id);
+    setProjects((prev) => prev.map((p) => (p.id === id ? finishProject(p, opts) : p)));
+    setHistoryFinishId(null);
+    setFlash(`Chantier « ${target?.name ?? ""} » terminé.`);
+  }
+
+  function reopenChantier(id: string) {
+    const target = projects.find((p) => p.id === id);
+    setProjects((prev) => prev.map((p) => (p.id === id ? reopenProject(p) : p)));
+    setFlash(`Chantier « ${target?.name ?? ""} » rouvert.`);
+  }
+
+  /** Ouvre l'historique, éventuellement avec le formulaire de clôture déjà prêt. */
+  function openHistory(finishId: string | null = null) {
+    setHistoryFinishId(finishId);
+    setHistoryOpen(true);
+    // Double frame : on attend que l'écran soit monté avant de défiler.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById("historique")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
   }
 
   function resetWorkspace() {
@@ -1371,6 +1416,11 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
   }
 
   const currentProject = projects.find((p) => p.id === currentProjectId) ?? null;
+  /** Projet visé par la confirmation de suppression (pour prévenir s'il est clôturé). */
+  const deleteTarget =
+    dialog.kind === "delete"
+      ? (projects.find((p) => p.id === dialog.id) ?? null)
+      : null;
   const pendingToApply = filterUnapplied(pendingMoves, appliedMoveIds);
   const stockWide = !terrain && !catalogOpen && viewMode === "stock";
   const shellWidth = stockWide ? "max-w-none" : "max-w-6xl";
@@ -1405,8 +1455,9 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
                 {dirty ? " •" : ""}
                 {terrain ? " — terrain" : " — poste d’atelier"}
               </p>
-              <div className="mt-1">
+              <div className="mt-1 flex flex-wrap items-center gap-2">
                 <JobStatusBadge info={jobStatus} />
+                {currentProject ? <ChantierStatusBadge project={currentProject} /> : null}
               </div>
             </div>
           </div>
@@ -1596,6 +1647,29 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
           shellWidth,
         )}
       >
+        {historyOpen && (
+          <ProjectsHistory
+            projects={projects}
+            currentId={currentProjectId}
+            initialFinishId={historyFinishId}
+            onBack={() => {
+              setHistoryOpen(false);
+              setHistoryFinishId(null);
+            }}
+            onOpen={(id) => {
+              const p = projects.find((x) => x.id === id);
+              if (!p) return;
+              guardUnsaved(() => {
+                openProject(p);
+                setHistoryOpen(false);
+                setHistoryFinishId(null);
+              });
+            }}
+            onFinish={finishChantier}
+            onReopen={reopenChantier}
+          />
+        )}
+
         {!terrain && pendingToApply.length > 0 && (
           <PendingMovesBanner
             items={pendingToApply}
@@ -1749,6 +1823,9 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
               onImportJournal={() => {
                 void handleImportJournal();
               }}
+              onHistory={() => openHistory(null)}
+              onFinish={() => openHistory(currentProjectId)}
+              canFinish={currentProject ? !isProjectFinished(currentProject) : false}
               jobStatus={jobStatus}
             />
 
@@ -2169,7 +2246,11 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
       <ConfirmDialog
         open={dialog.kind === "delete"}
         title="Supprimer le projet"
-        message="Cette action est définitive. Le projet sera retiré de cet ordinateur."
+        message={
+          deleteTarget && isProjectFinished(deleteTarget)
+            ? "Ce chantier est terminé : le supprimer efface aussi son historique de clôture (date de fin et remarque). Cette action est définitive."
+            : "Cette action est définitive. Le projet sera retiré de cet ordinateur."
+        }
         actions={[
           {
             label: "Annuler",

@@ -29,6 +29,16 @@ Voir [DESKTOP.md](DESKTOP.md) pour :
 2. Lancer une fenêtre Electron (`npm run desktop`)
 3. Produire un installateur `.exe` / `.dmg` / AppImage (`npm run desktop:dist`)
 
+## Suivi des chantiers
+
+Chaque projet peut être **clôturé** : bouton **Terminer le chantier** (date de fin, remarque facultative), puis **Historique des chantiers** dans la section Projets.
+
+- **Écran Historique** : filtres *Tous / En cours / Terminés*, recherche, tri (date de fin, dernière modification, nom, client) et compte des chantiers.
+- **Un chantier terminé n'est pas verrouillé** : il reste ouvrable et modifiable, et se **rouvre** depuis l'historique — la clôture est alors effacée.
+- **Deux états distincts** : l'état de vie (*en cours* / *terminé*) et l'avancement du dossier (*calepiné*, *stock déduit*, *devis émis*) sont affichés côte à côte. Un chantier peut être terminé sans que le devis ait été émis.
+- **Téléphone** : l'état est **affiché** dans l'en-tête ; la clôture se fait **sur le PC** uniquement.
+- Supprimer un chantier terminé demande une confirmation explicite : la suppression efface aussi son historique.
+
 ## Déployer sur Cloudflare Pages
 
 Le PC Electron reste la source de vérité. Le téléphone ouvre le **même** build web, en PWA (mode Terrain).

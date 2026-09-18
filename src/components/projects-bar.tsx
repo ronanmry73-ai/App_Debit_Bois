@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { Project, ProjectSummary, JobStatusInput } from "@/lib/projects";
+import type { Project, JobStatusInput } from "@/lib/projects";
+import { ChantierStatusBadge } from "@/components/chantier-status-badge";
 import type { ProjectMeta } from "@/lib/persist";
 import { JobStatusBadge } from "@/components/job-status-badge";
 
@@ -27,6 +28,12 @@ type Props = {
   onExport: () => void;
   onImport: () => void;
   onImportJournal: () => void;
+  /** Ouvre l'écran d'historique des chantiers. */
+  onHistory: () => void;
+  /** Ouvre l'historique avec le formulaire de clôture du projet courant. */
+  onFinish: () => void;
+  /** Un projet enregistré et encore en cours peut être clôturé. */
+  canFinish: boolean;
   jobStatus: JobStatusInput;
 };
 
@@ -60,13 +67,16 @@ export function ProjectsBar({
   onExport,
   onImport,
   onImportJournal,
+  onHistory,
+  onFinish,
+  canFinish,
   jobStatus,
 }: Props) {
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortKey>("updatedAt");
   const [openList, setOpenList] = useState(false);
 
-  const list: ProjectSummary[] = useMemo(() => {
+  const list: Project[] = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const rows = projects.filter((p) => {
       if (!needle) return true;
@@ -99,7 +109,8 @@ export function ProjectsBar({
                       dirty ? " — modifications non enregistrées" : " — pas encore enregistré"
                     }`}
               </p>
-              <div className="mt-2">
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {current ? <ChantierStatusBadge project={current} /> : null}
                 <JobStatusBadge info={jobStatus} />
               </div>
             </div>
@@ -118,6 +129,14 @@ export function ProjectsBar({
                 <FolderOpen />
                 Ouvrir un projet
               </Button>
+              <Button type="button" variant="outline" onClick={onHistory}>
+                Historique des chantiers
+              </Button>
+              {canFinish ? (
+                <Button type="button" variant="outline" onClick={onFinish}>
+                  Terminer le chantier
+                </Button>
+              ) : null}
               <Button type="button" variant="ghost" onClick={onClose} disabled={!currentId && !dirty}>
                 Fermer le projet
               </Button>
