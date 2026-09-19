@@ -3,6 +3,8 @@ import {
   FileText,
   Calculator,
   ChevronDown,
+  FolderOpen,
+  History,
   Package,
   Layers,
   Hammer,
@@ -1585,6 +1587,15 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
               <Settings2 />
               Catalogue
             </Button>
+            {/* Suivi du chantier et registre : des écrans, pas des actions de projet. */}
+            <Button type="button" variant="ghost" onClick={() => openHistory(null)}>
+              <History />
+              Historique des chantiers
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setDocumentsOpen(true)}>
+              <FolderOpen />
+              Registre des documents
+            </Button>
             {viewMode === "atelier" && !catalogOpen && (
               <Button
                 type="button"
@@ -1842,8 +1853,6 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
               onImportJournal={() => {
                 void handleImportJournal();
               }}
-              onHistory={() => openHistory(null)}
-              onDocuments={() => setDocumentsOpen(true)}
               onFinish={() => openHistory(currentProjectId)}
               canFinish={currentProject ? !isProjectFinished(currentProject) : false}
               jobStatus={jobStatus}
