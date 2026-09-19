@@ -43,7 +43,7 @@ Chaque projet peut être **clôturé** : bouton **Terminer le chantier** (date d
 
 L'application **n'émet pas** les factures : elle **importe**, indexe et conserve les pièces produites ailleurs (factures clients, factures fournisseurs, tickets) et garde la copie dans le dossier Drive.
 
-- **Import d'un dossier d'exports** : un fichier = une facture. L'export est lu par son gabarit (blocs `Clients` / `Factures` / `Produit`), séparateur tabulation ou point-virgule, avec les écritures françaises (virgule décimale, `jj/mm/aaaa`, encodage Windows-1252).
+- **Import d'un dossier d'exports** : un fichier = une facture. Formats acceptés : `.csv`, `.tsv`, `.txt` et **classeur Excel `.xlsx`** (lu directement, sans dépendance ajoutée). L'export est lu par son gabarit (blocs `Clients` / `Factures` / `Produit`), séparateur tabulation ou point-virgule, écritures françaises (virgule décimale, `jj/mm/aaaa`, encodage Windows-1252) et **guillemets CSV respectés** (une adresse contenant `;` ne décale plus les colonnes).
 - **Trois contrôles avant d'accepter un fichier** : `Total` de ligne = `Quantité` × `TTC` · taux de TVA légal (0 · 2,1 · 5,5 · 8,5 · 10 · 20 %) · `Total` de pied = somme des lignes. Un export incohérent est **refusé avec son motif**, les autres fichiers du dossier sont importés quand même.
 - **Ré-import sans doublon** : la clé est le numéro de facture, donc un ré-import met à jour au lieu d'empiler. Si un montant déjà indexé change, c'est signalé comme **conflit** et l'existant est conservé — une facture ne se réécrit pas en silence.
 - **Copies classées dans le dossier Drive** : `factures/<année>/FAC-2026-0002.pdf`, `factures/fournisseurs/<année>/`, et `factures/_a_classer/` pour les pièces en attente.

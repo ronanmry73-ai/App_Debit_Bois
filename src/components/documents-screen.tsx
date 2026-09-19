@@ -27,15 +27,25 @@ type Props = {
 };
 
 type ImportReport = {
+  /** Dossier réellement choisi : affiché, pour savoir quoi corriger s'il est vide. */
+  dossier: string;
   lus: number;
   ajoutes: number;
   inchanges: number;
   misAJour: number;
   conflits: string[];
   erreurs: { fichier: string; erreurs: string[] }[];
+  /** Fichiers présents dans le dossier mais d'une extension non reconnue. */
+  ignores: string[];
 };
 
-const EXPORT_EXTENSIONS = [".csv", ".tsv", ".txt"];
+/** Extension en minuscules, avec le point (`.csv`), ou chaîne vide. */
+function extensionOf(name: string): string {
+  const at = name.lastIndexOf(".");
+  return at >= 0 ? name.slice(at).toLowerCase() : "";
+}
+
+const EXPORT_EXTENSIONS = [".csv", ".tsv", ".txt", ".xlsx"];
 const JUSTIFICATIF_EXTENSIONS = [".pdf", ".jpg", ".jpeg", ".png", ".webp"];
 
 function matchesFilter(doc: IndexedDocument, filter: Filter): boolean {
@@ -109,10 +119,31 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
     setBusy(true);
     setReport(null);
     try {
-      const listed = await api.documentsListFolder(folder, EXPORT_EXTENSIONS);
-      const files = listed?.files ?? [];
-      const pdfs =
-        (await api.documentsListFolder(folder, [".pdf"]))?.files ?? [];
+      // On liste **tout** le dossier : ce qui n'est pas un export est signalé,
+      // au lieu de disparaître sans explication.
+      const all = (await api.documentsListFolder(folder, []))?.files ?? [];
+      const files = all.filter((item) =>
+        EXPORT_EXTENSIONS.includes(extensionOf(item.name)),
+      );
+      const ignores = all
+        .filter((item) => !EXPORT_EXTENSIONS.includes(extensionOf(item.name)))
+        .map((item) => item.name);
+      const pdfs = (await api.documentsListFolder(folder, [".pdf"]))?.files ?? [];
+
+      if (files.length === 0) {
+        setReport({
+          dossier: folder,
+          lus: 0,
+          ajoutes: 0,
+          inchanges: 0,
+          misAJour: 0,
+          conflits: [],
+          erreurs: [],
+          ignores,
+        });
+        return;
+      }
+
       const incoming: IndexedDocument[] = [];
       const erreurs: { fichier: string; erreurs: string[] }[] = [];
 
@@ -153,12 +184,14 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
       const outcome = mergeDocuments(documents, incoming);
       onDocuments(outcome.documents);
       setReport({
+        dossier: folder,
         lus: files.length,
         ajoutes: outcome.added,
         inchanges: outcome.unchanged,
         misAJour: outcome.updated,
         conflits: outcome.conflits,
         erreurs,
+        ignores,
       });
       await refreshInbox();
     } catch (err) {
@@ -285,7 +318,24 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
 
           {report ? (
             <div className="mt-3 rounded-md border border-border bg-muted/40 px-3 py-3 text-sm">
-              <p className="font-medium">
+              <p className="text-xs text-muted-foreground">
+                Dossier : <code>{report.dossier}</code>
+              </p>
+              {report.lus === 0 ? (
+                <p className="mt-2 font-medium">
+                  Aucun export reconnu. Extensions lues : {EXPORT_EXTENSIONS.join(", ")} — les
+                  sous-dossiers ne sont pas parcourus.
+                </p>
+              ) : null}
+              {report.ignores.length > 0 ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {report.ignores.length} fichier{report.ignores.length > 1 ? "s" : ""} ignoré
+                  {report.ignores.length > 1 ? "s" : ""} (extension non reconnue) :{" "}
+                  {report.ignores.slice(0, 8).join(", ")}
+                  {report.ignores.length > 8 ? "…" : ""}
+                </p>
+              ) : null}
+              <p className="mt-2 font-medium">
                 Import : {report.lus} fichier{report.lus > 1 ? "s" : ""} lu
                 {report.lus > 1 ? "s" : ""} → {report.ajoutes} ajouté
                 {report.ajoutes > 1 ? "s" : ""}, {report.inchanges} inchangé

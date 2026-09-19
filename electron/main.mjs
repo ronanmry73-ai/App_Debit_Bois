@@ -20,6 +20,7 @@ import {
   readTextSmart,
   storeDocumentFile,
 } from "./documents-files.mjs";
+import { xlsxToTabbedText } from "./xlsx-read.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -316,6 +317,27 @@ function registerDocumentsIpc() {
   ipcMain.handle("debit-bois:documents-read-text", async (_event, file) => {
     if (typeof file !== "string" || !file) {
       return { ok: false, text: "", error: "Chemin manquant." };
+    }
+    // Un classeur Excel est converti en texte tabulé : il devient un export
+    // comme un autre pour le lecteur de gabarit du rendu.
+    if (/\.xlsx$/i.test(file)) {
+      try {
+        const buffer = await readFile(file);
+        return { ok: true, text: xlsxToTabbedText(buffer), encoding: "xlsx" };
+      } catch (err) {
+        const message =
+          err && typeof err === "object" && "message" in err
+            ? String(err.message)
+            : String(err);
+        return { ok: false, text: "", error: `Classeur illisible : ${message}` };
+      }
+    }
+    if (/\.xls$/i.test(file)) {
+      return {
+        ok: false,
+        text: "",
+        error: "Ancien format .xls non pris en charge — enregistre le classeur en .xlsx.",
+      };
     }
     return readTextSmart(file);
   });

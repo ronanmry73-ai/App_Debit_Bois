@@ -195,6 +195,47 @@ export function detectSeparator(text: string): string {
   return tabs >= semicolons ? "\t" : ";";
 }
 
+/**
+ * Découpe une ligne en cellules en **respectant les guillemets**.
+ *
+ * Indispensable pour les exports point-virgule : une adresse comme
+ * « 78 rue de l'arbre; 73100 Aime » y est citée, et un découpage naïf sur `;`
+ * décalerait toutes les colonnes suivantes.
+ */
+export function splitDelimitedLine(line: string, separator: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (inQuotes) {
+      if (char === '"') {
+        if (line[i + 1] === '"') {
+          current += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = true;
+      continue;
+    }
+    if (char === separator) {
+      cells.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current);
+  return cells.map((cell) => cell.trim());
+}
+
 function normalizeCell(value: string): string {
   return value
     .normalize("NFD")
@@ -456,7 +497,7 @@ export function parseFactureExport(text: string): ParseFactureResult {
   const separator = detectSeparator(text);
   const rows = text
     .split(/\r?\n/)
-    .map((line) => line.split(separator).map((cell) => cell.trim()));
+    .map((line) => splitDelimitedLine(line, separator));
 
   const hasBlock = (label: string): boolean =>
     rows.some((row) => row.some((cell) => normalizeCell(cell) === label));

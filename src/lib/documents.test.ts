@@ -277,6 +277,30 @@ test("documentKey s'appuie sur le numéro, sinon sur l'empreinte", () => {
   assert.equal(documentKey(doc({ numero: "", fichier: { chemin: "x.pdf" } })), "f:x.pdf");
 });
 
+test("CSV point-virgule : une adresse citée ne décale pas les colonnes", () => {
+  const texte = [
+    "Clients;;",
+    "Nom;Adresse;Téléphone",
+    'Romain;"78 rue de l\'arbre; 73100 Aime";658754815',
+    ";;",
+    "Factures;;",
+    "Num Facture;Date",
+    "2;12/08/2024",
+    ";;",
+    "Produit;Quantité;HT;TTC;Total",
+    "Table basse;1;150;180;180",
+    ";;Total",
+    ";;180",
+  ].join("\n");
+  const parsed = parseFactureExport(texte);
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.facture.tiers.nom, "Romain");
+  assert.equal(parsed.facture.tiers.adresse, "78 rue de l'arbre; 73100 Aime");
+  assert.equal(parsed.facture.tiers.telephone, "658754815");
+  assert.equal(parsed.facture.ttc, 180);
+});
+
 test("countDocuments répartit l'index", () => {
   const stats = countDocuments([
     doc({ id: "a" }),
