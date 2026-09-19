@@ -54,6 +54,11 @@ function inputToIso(value: string): string {
 	return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
 
+/** Sens du mouvement qui règle une pièce : entrée pour un client, sortie sinon. */
+function sensAttendu(doc: Pick<IndexedDocument, "kind">): MouvementSens {
+	return doc.kind === "facture_client" || doc.kind === "avoir_client" ? "entree" : "sortie";
+}
+
 /**
  * Écran **Trésorerie** : ce qui est facturé, ce qui est réellement encaissé, ce
  * qu'il reste à percevoir ou à payer, et le **lettrage** (relier un mouvement
@@ -105,6 +110,14 @@ export function TreasuryScreen({
 		() => mouvementsNonAffectes(mouvements, affectations),
 		[mouvements, affectations],
 	);
+	const docEnLettrage = documents.find((doc) => doc.id === lettrageDocId) ?? null;
+	/**
+	 * On ne propose que les mouvements du **bon sens** : on n'encaisse pas une
+	 * facture fournisseur, on ne paie pas une facture client.
+	 */
+	const candidats = docEnLettrage
+		? libres.filter((mouvement) => mouvement.sens === sensAttendu(docEnLettrage))
+		: libres;
 	const mouvementASupprimer =
 		mouvements.find((mouvement) => mouvement.id === suppressionId) ?? null;
 
@@ -134,7 +147,8 @@ export function TreasuryScreen({
 	/** Prépare le lettrage : montant par défaut = le plus petit des deux restes. */
 	function demarrerLettrage(doc: IndexedDocument) {
 		const reste = resteDuDocument(doc, affectations);
-		const premier = libres[0] ?? null;
+		const premier =
+			libres.find((mouvement) => mouvement.sens === sensAttendu(doc)) ?? null;
 		setLettrageDocId(doc.id);
 		setLettrageMouvementId(premier?.id ?? "");
 		if (premier) {
@@ -401,7 +415,7 @@ export function TreasuryScreen({
 														onChange={(event) => setLettrageMouvementId(event.target.value)}
 													>
 														<option value="">— choisir un mouvement —</option>
-														{libres.map((mouvement) => (
+														{candidats.map((mouvement) => (
 															<option key={mouvement.id} value={mouvement.id}>
 																{formatDay(mouvement.date)} ·{" "}
 																{MOUVEMENT_SENS_LABELS[mouvement.sens]} ·{" "}
@@ -415,6 +429,106 @@ export function TreasuryScreen({
 													<Label htmlFor={`montant-${doc.id}`}>Montant</Label>
 													<Input
 														id={`montant-${doc.id}`}
+														className="mt-1"
+														value={lettrageMontant}
+														onChange={(event) => setLettrageMontant(event.target.value)}
+													/>
+												</div>
+												<Button type="button" onClick={() => validerLettrage(doc)}>
+													Affecter
+												</Button>
+												<Button
+													type="button"
+													variant="ghost"
+													onClick={() => setLettrageDocId(null)}
+												>
+													Annuler
+												</Button>
+											</div>
+										) : null}
+									</li>
+								);
+							})}
+						</ul>
+					)}
+				</CardContent>
+			</Card>
+
+			<Card className="mt-4">
+				<CardContent className="p-5">
+					<h3 className="font-display text-lg font-medium tracking-tight">
+						À payer
+					</h3>
+					<p className="mt-1 text-sm text-muted-foreground">
+						Factures fournisseurs et tickets non réglés — on n’y affecte que des
+						décaissements.
+					</p>
+					{echeancier.aPayer.length === 0 ? (
+						<p className="mt-2 text-sm text-muted-foreground">
+							Rien à payer : toutes les pièces fournisseurs sont réglées.
+						</p>
+					) : (
+						<ul className="mt-3 divide-y divide-border overflow-hidden rounded-lg border border-border">
+							{echeancier.aPayer.map((ligne) => {
+								const doc = ligne.document;
+								return (
+									<li key={doc.id} className="flex flex-col gap-2 bg-card px-3 py-3">
+										<div className="flex flex-wrap items-start justify-between gap-2">
+											<div>
+												<p className="font-medium">
+													{DOCUMENT_KIND_LABELS[doc.kind]}{" "}
+													{doc.numero ? `n° ${doc.numero}` : "(sans numéro)"}
+													{doc.tiers.nom ? ` — ${doc.tiers.nom}` : ""}
+												</p>
+												<p className="text-xs text-muted-foreground">
+													{doc.dateDocument ? `${formatDay(doc.dateDocument)} · ` : ""}
+													réglé {formatEuros(montantRegle(doc.id, affectations))} sur{" "}
+													{formatEuros(doc.ttc)}
+													{ligne.echeance ? ` · échéance ${formatDay(ligne.echeance)}` : ""}
+													{ligne.enRetard && ligne.jours !== null
+														? ` · ${ligne.jours} jour${ligne.jours > 1 ? "s" : ""} de retard`
+														: ""}
+												</p>
+											</div>
+											<div className="flex flex-wrap items-center gap-2">
+												<span className="font-medium">{formatEuros(ligne.reste)}</span>
+												<Button
+													type="button"
+													size="sm"
+													variant="outline"
+													onClick={() => demarrerLettrage(doc)}
+												>
+													Lettrer
+												</Button>
+											</div>
+										</div>
+
+										{lettrageDocId === doc.id ? (
+											<div className="flex flex-wrap items-end gap-2 rounded-md border border-border bg-muted/40 p-3">
+												<div className="min-w-56 flex-1">
+													<Label htmlFor={`lettrage-payer-${doc.id}`}>
+														Décaissement à affecter
+													</Label>
+													<select
+														id={`lettrage-payer-${doc.id}`}
+														className="mt-1 flex h-11 w-full rounded-md border border-input bg-card px-3 text-sm"
+														value={lettrageMouvementId}
+														onChange={(event) => setLettrageMouvementId(event.target.value)}
+													>
+														<option value="">— choisir un mouvement —</option>
+														{candidats.map((mouvement) => (
+															<option key={mouvement.id} value={mouvement.id}>
+																{formatDay(mouvement.date)} ·{" "}
+																{formatEuros(resteDuMouvement(mouvement, affectations))}{" "}
+																disponible
+															</option>
+														))}
+													</select>
+												</div>
+												<div>
+													<Label htmlFor={`montant-payer-${doc.id}`}>Montant</Label>
+													<Input
+														id={`montant-payer-${doc.id}`}
 														className="mt-1"
 														value={lettrageMontant}
 														onChange={(event) => setLettrageMontant(event.target.value)}

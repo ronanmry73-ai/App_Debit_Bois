@@ -58,7 +58,7 @@ Accès par **Registre des documents** dans la section Projets (sur le PC : l'imp
 L'argent qui bouge réellement : **mouvements** (encaissements, décaissements) et **lettrage** — relier un mouvement à une ou plusieurs pièces.
 
 - **Aucun solde n'est saisi** : le reste dû est toujours recalculé (`montant de la pièce − somme des affectations`). Facture réglée en deux fois, virement couvrant deux factures, acompte, avoir : tout passe par des **affectations** (mouvement → pièce, avec un montant).
-- **Écran Trésorerie** : tuiles *Facturé aux clients · Encaissé · Reste à encaisser · Dont en retard · Sorties · Solde suivi* ; saisie d'un mouvement (sens, date, montant, compte, moyen, référence) ; liste **À encaisser** avec lettrage en deux clics (montant pré-rempli au plus petit des deux restes) ; liste des mouvements avec leur **reste non affecté** ; **soldes suivis** par compte (ouverture + entrées − sorties).
+- **Écran Trésorerie** : tuiles *Facturé aux clients · Encaissé · Reste à encaisser · Dont en retard · Sorties · Solde suivi* ; saisie d'un mouvement (sens, date, montant, compte, moyen, référence) ; listes **À encaisser** (clients) et **À payer** (fournisseurs, tickets) avec lettrage en deux clics — montant pré-rempli au plus petit des deux restes, et **seuls les mouvements du bon sens sont proposés** (on n'encaisse pas une facture fournisseur) ; liste des mouvements avec leur **reste non affecté** ; **soldes suivis** par compte (ouverture + entrées − sorties).
 - **Échéances** : celle de la pièce si elle en porte une, sinon **date + 30 jours** ; les retards sont signalés en rouge.
 - **Solde suivi, pas solde bancaire** : il ne connaît que ce que tu saisis. Le pointage viendra plus tard.
 
