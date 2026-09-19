@@ -3,6 +3,7 @@ import {
   FileText,
   Calculator,
   ChevronDown,
+  Euro,
   FolderOpen,
   History,
   Package,
@@ -30,6 +31,7 @@ import { CatalogPanel } from "@/components/catalog-panel";
 import { ProjectsBar } from "@/components/projects-bar";
 import { ProjectsHistory } from "@/components/projects-history";
 import { DocumentsScreen } from "@/components/documents-screen";
+import { TreasuryScreen } from "@/components/treasury-screen";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { JobNeedPanel } from "@/components/job-need-panel";
 import { SupplierCostPanel } from "@/components/supplier-cost-panel";
@@ -131,6 +133,12 @@ import {
   type PendingMove,
 } from "@/lib/movements";
 import type { IndexedDocument } from "@/lib/documents";
+import {
+  comptesParDefaut,
+  type Affectation,
+  type Compte,
+  type Mouvement,
+} from "@/lib/payments";
 import { terrainPreferenceFromSearch, useTerrainMode, type TerrainPreference } from "@/lib/terrain";
 import { useTerrainDrive } from "@/lib/use-terrain-drive";
 
@@ -266,11 +274,17 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
   const [projectMeta, setProjectMeta] = useState<ProjectMeta>(emptyMeta);
   /** Registre des documents importés (factures, tickets). */
   const [documents, setDocuments] = useState<IndexedDocument[]>([]);
+  /** Trésorerie : mouvements d'argent, lettrage, comptes suivis. */
+  const [mouvements, setMouvements] = useState<Mouvement[]>([]);
+  const [affectations, setAffectations] = useState<Affectation[]>([]);
+  const [comptes, setComptes] = useState<Compte[]>(comptesParDefaut());
   /** Écran « Historique des chantiers » + chantier à clôturer en arrivant. */
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyFinishId, setHistoryFinishId] = useState<string | null>(null);
   /** Écran « Registre des documents » : factures, fournisseurs, tickets. */
   const [documentsOpen, setDocumentsOpen] = useState(false);
+  /** Écran « Trésorerie » : mouvements d'argent et lettrage. */
+  const [treasuryOpen, setTreasuryOpen] = useState(false);
   const [usedRefIds, setUsedRefIds] = useState<string[]>([]);
   const [stockDeduction, setStockDeduction] = useState<StockDeduction | null>(null);
   const [savedFp, setSavedFp] = useState("");
@@ -360,6 +374,9 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
     setCatalog(saved.catalog);
     setProjects(saved.projects);
     setDocuments(saved.documents ?? []);
+    setMouvements(saved.mouvements ?? []);
+    setAffectations(saved.affectations ?? []);
+    setComptes(saved.comptes ?? comptesParDefaut());
     setProjectMeta(saved.projectMeta);
     setUsedRefIds(saved.usedRefIds);
     setSelected(saved.selectedStrategy || "mixed");
@@ -550,6 +567,9 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
         pendingMoves,
         appliedMoveIds,
         documents,
+        mouvements,
+        affectations,
+        comptes,
       });
     }, 280);
     return () => clearTimeout(t);
@@ -572,6 +592,9 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
     pendingMoves,
     appliedMoveIds,
     documents,
+    mouvements,
+    affectations,
+    comptes,
   ]);
 
   useEffect(() => {
@@ -1263,6 +1286,9 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
       pendingMoves,
       appliedMoveIds,
       documents,
+      mouvements,
+      affectations,
+      comptes,
     };
   }
 
@@ -1618,6 +1644,10 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
               <FolderOpen />
               Registre des documents
             </Button>
+            <Button type="button" variant="ghost" onClick={() => setTreasuryOpen(true)}>
+              <Euro />
+              Trésorerie
+            </Button>
             {viewMode === "atelier" && !catalogOpen && (
               <Button
                 type="button"
@@ -1717,6 +1747,18 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
           shellWidth,
         )}
       >
+        {treasuryOpen && (
+          <TreasuryScreen
+            documents={documents}
+            mouvements={mouvements}
+            affectations={affectations}
+            comptes={comptes}
+            onMouvements={setMouvements}
+            onAffectations={setAffectations}
+            onBack={() => setTreasuryOpen(false)}
+          />
+        )}
+
         {documentsOpen && (
           <DocumentsScreen
             documents={documents}

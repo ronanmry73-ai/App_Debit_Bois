@@ -72,6 +72,8 @@ export type IndexedDocument = {
   numero: string;
   /** Date de la pièce (ISO, calée à midi local). */
   dateDocument: string | null;
+  /** Échéance de règlement (ISO) ; à défaut, date + délai de paiement. */
+  echeance?: string | null;
   tiers: DocumentTiers;
   lignes: DocumentLine[];
   /** Totaux calculés depuis les lignes. */

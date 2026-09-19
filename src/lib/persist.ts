@@ -12,6 +12,12 @@ import {
 } from "./presets.ts";
 import { snapshotProject, migrateProject, type Project } from "./projects.ts";
 import { type IndexedDocument } from "./documents.ts";
+import {
+  comptesParDefaut,
+  type Affectation,
+  type Compte,
+  type Mouvement,
+} from "./payments.ts";
 import { migratePieceRows } from "./piece-io.ts";
 import {
   exampleStock,
@@ -57,6 +63,10 @@ export type PersistedState = {
    * son introduction restent lisibles et le miroir reste accepté par le téléphone.
    */
   documents: IndexedDocument[];
+  /** Trésorerie : mouvements d'argent, lettrage, comptes suivis (additif, v5). */
+  mouvements: Mouvement[];
+  affectations: Affectation[];
+  comptes: Compte[];
 };
 
 export function emptyMeta(): ProjectMeta {
@@ -102,6 +112,43 @@ function migrateDocuments(raw: unknown): IndexedDocument[] {
   return out;
 }
 
+/** Mouvements, affectations et comptes : champs **additifs** au format v5. */
+function migrateMouvements(raw: unknown): Mouvement[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (row): row is Mouvement =>
+      Boolean(row) &&
+      typeof row === "object" &&
+      typeof (row as Mouvement).id === "string" &&
+      Number.isFinite(Number((row as Mouvement).montant)),
+  );
+}
+
+function migrateAffectations(raw: unknown): Affectation[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (row): row is Affectation =>
+      Boolean(row) &&
+      typeof row === "object" &&
+      typeof (row as Affectation).mouvementId === "string" &&
+      typeof (row as Affectation).documentId === "string" &&
+      Number.isFinite(Number((row as Affectation).montant)),
+  );
+}
+
+/** Un état sans comptes (fichier antérieur) reçoit les deux comptes par défaut. */
+function migrateComptes(raw: unknown): Compte[] {
+  if (!Array.isArray(raw) || raw.length === 0) return comptesParDefaut();
+  const comptes = raw.filter(
+    (row): row is Compte =>
+      Boolean(row) &&
+      typeof row === "object" &&
+      typeof (row as Compte).id === "string" &&
+      typeof (row as Compte).libelle === "string",
+  );
+  return comptes.length > 0 ? comptes : comptesParDefaut();
+}
+
 export function migrateState(
   raw: unknown,
   defaults: { settings: AppSettings; emptyRow: PieceRow },
@@ -125,6 +172,9 @@ export function migrateState(
     pendingMoves: [],
     appliedMoveIds: [],
     documents: [],
+    mouvements: [],
+    affectations: [],
+    comptes: comptesParDefaut(),
   };
   if (!raw || typeof raw !== "object") return base;
   const o = raw as Record<string, unknown>;
@@ -214,6 +264,9 @@ export function migrateState(
     pendingMoves,
     appliedMoveIds,
     documents: migrateDocuments(o.documents),
+    mouvements: migrateMouvements(o.mouvements),
+    affectations: migrateAffectations(o.affectations),
+    comptes: migrateComptes(o.comptes),
   };
 }
 
