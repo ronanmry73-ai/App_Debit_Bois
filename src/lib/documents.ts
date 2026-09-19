@@ -252,20 +252,66 @@ function rowsNonEmptyFrom(rows: string[][], from: number): number {
   return -1;
 }
 
-/** Première ligne contenant toutes les amorces demandées (en-tête de colonnes). */
-function rowsFindHeader(rows: string[][], from: number, required: string[]): number {
-  for (let i = from; i < rows.length; i += 1) {
-    const cells = (rows[i] ?? []).map(normalizeCell);
-    if (required.every((needle) => cells.some((cell) => cell.startsWith(needle)))) {
-      return i;
-    }
-  }
-  return -1;
+/**
+ * Clé de comparaison d'un libellé : minuscules, sans accent ni ponctuation.
+ * « N° Facture » → `nfacture`, « Total HT » → `totalht`, « Adresse mail » →
+ * `adressemail`. C'est ce qui rend la lecture indépendante de la mise en forme.
+ */
+function labelKey(value: string): string {
+  return normalizeCell(value).replace(/[^a-z0-9]/g, "");
 }
 
-/** Ligne d'un titre de bloc (« Clients », « Factures », « Produit »). */
-function rowsIndexOfBlock(rows: string[][], label: string): number {
-  return rows.findIndex((row) => row.some((cell) => normalizeCell(cell) === label));
+/** Libellés connus : une cellule qui en porte un n'est jamais une valeur. */
+const KNOWN_LABELS = new Set([
+  "client",
+  "clients",
+  "nom",
+  "prenom",
+  "adresse",
+  "adressepostale",
+  "telephone",
+  "tel",
+  "portable",
+  "mobile",
+  "mail",
+  "adressemail",
+  "email",
+  "courriel",
+  "numfacture",
+  "nfacture",
+  "numerofacture",
+  "facture",
+  "factures",
+  "date",
+  "datedocument",
+  "datefacture",
+  "produit",
+  "produits",
+  "article",
+  "articles",
+  "designation",
+  "quantite",
+  "qte",
+  "ht",
+  "ttc",
+  "total",
+  "totalht",
+  "tva",
+  "prix",
+  "prixunitaire",
+  "remise",
+]);
+
+function isLabelCell(value: string): boolean {
+  return KNOWN_LABELS.has(labelKey(value));
+}
+
+/** Première ligne portant un des libellés demandés (comparaison par clé). */
+function findHeaderRowByKeys(rows: string[][], from: number, keys: string[]): number {
+  for (let i = from; i < rows.length; i += 1) {
+    if ((rows[i] ?? []).some((cell) => keys.includes(labelKey(cell)))) return i;
+  }
+  return -1;
 }
 
 /**
@@ -297,71 +343,79 @@ function lastMontantOf(row: string[]): number | null {
   return null;
 }
 
-/** Bloc « Clients » : identité du client facturé. */
-function readClientsBlock(rows: string[][]): {
+/**
+ * Identité de la pièce : client, numéro, date.
+ *
+ * Les **deux dispositions** de feuille sont lues par la même règle : on cherche le
+ * libellé, puis sa valeur est prise **à droite sur la même ligne**, sinon **juste
+ * en dessous dans la même colonne**, en ignorant les cellules qui sont elles-mêmes
+ * des libellés. Ça couvre l'ancien gabarit (en-têtes de colonnes au-dessus des
+ * valeurs) comme le nouveau (libellés en colonne).
+ *
+ * La recherche démarre à l'ancre « Client / Clients / Nom » : sans elle, le bloc
+ * émetteur en haut de la feuille (« Telephone », « Mail: ») serait pris pour les
+ * coordonnées du client.
+ */
+function readIdentity(rows: string[][]): {
   tiers: DocumentTiers;
-  erreurs: string[];
-  avertissements: string[];
-} {
-  const erreurs: string[] = [];
-  const avertissements: string[] = [];
-  const headerAt = rowsFindHeader(rows, rowsIndexOfBlock(rows, "clients") + 1, ["nom"]);
-  if (headerAt < 0) {
-    erreurs.push("En-tête du bloc « Clients » introuvable (colonne « Nom »).");
-    return { tiers: { nom: "" }, erreurs, avertissements };
-  }
-  const header = (rows[headerAt] ?? []).map(normalizeCell);
-  const dataAt = rowsNonEmptyFrom(rows, headerAt + 1);
-  const data = dataAt >= 0 ? (rows[dataAt] ?? []) : [];
-  const tiers: DocumentTiers = {
-    nom: cellOfRow(data, columnIndex(header, ["nom"])),
-    prenom: cellOfRow(data, columnIndex(header, ["prenom"])) || undefined,
-    adresse: cellOfRow(data, columnIndex(header, ["adresse"])) || undefined,
-    telephone: cellOfRow(data, columnIndex(header, ["telephone", "tel"])) || undefined,
-    email:
-      cellOfRow(data, columnIndex(header, ["adresse mail", "mail", "email", "e-mail"])) ||
-      undefined,
-  };
-  if (!tiers.nom) avertissements.push("Nom du client absent de l'export.");
-  return { tiers, erreurs, avertissements };
-}
-
-/** Bloc « Factures » : numéro et date de la pièce. */
-function readFacturesBlock(rows: string[][]): {
   numero: string;
   dateDocument: string | null;
-  erreurs: string[];
   avertissements: string[];
 } {
-  const erreurs: string[] = [];
   const avertissements: string[] = [];
-  const headerAt = rowsFindHeader(rows, rowsIndexOfBlock(rows, "factures") + 1, ["num"]);
-  if (headerAt < 0) {
-    erreurs.push("En-tête du bloc « Factures » introuvable (colonne « Num Facture »).");
-    return { numero: "", dateDocument: null, erreurs, avertissements };
-  }
-  const header = (rows[headerAt] ?? []).map(normalizeCell);
-  const dataAt = rowsNonEmptyFrom(rows, headerAt + 1);
-  const data = dataAt >= 0 ? (rows[dataAt] ?? []) : [];
-  const numero = cellOfRow(data, columnIndex(header, ["num"])).trim();
-  const rawDate = cellOfRow(data, columnIndex(header, ["date"]));
+  const anchor = rows.findIndex((row) =>
+    row.some((cell) => ["client", "clients", "nom"].includes(labelKey(cell))),
+  );
+  const start = anchor >= 0 ? anchor : 0;
+
+  /** Valeur du premier libellé trouvé (à droite, sinon en dessous). */
+  const valueFor = (keys: string[]): string => {
+    for (let row = start; row < rows.length; row += 1) {
+      const cells = rows[row] ?? [];
+      for (let column = 0; column < cells.length; column += 1) {
+        if (!keys.includes(labelKey(cells[column] ?? ""))) continue;
+        const right = (cells[column + 1] ?? "").trim();
+        if (right && !isLabelCell(right)) return right;
+        for (let below = row + 1; below <= row + 2 && below < rows.length; below += 1) {
+          const down = ((rows[below] ?? [])[column] ?? "").trim();
+          if (down && !isLabelCell(down)) return down;
+        }
+      }
+    }
+    return "";
+  };
+
+  const tiers: DocumentTiers = {
+    nom: valueFor(["nom", "raisonsociale", "societe"]),
+    prenom: valueFor(["prenom"]) || undefined,
+    adresse: valueFor(["adresse", "adressepostale"]) || undefined,
+    telephone: valueFor(["telephone", "tel", "portable", "mobile"]) || undefined,
+    email: valueFor(["adressemail", "mail", "email", "courriel"]) || undefined,
+  };
+  const numero = valueFor(["numfacture", "nfacture", "numerofacture", "facture"]);
+  const rawDate = valueFor(["date", "datedocument", "datefacture"]);
   const dateDocument = parseDateFr(rawDate);
-  if (!numero) avertissements.push("Numéro de facture absent de l'export.");
+
+  if (!tiers.nom) avertissements.push("Nom du client absent de la feuille.");
+  if (!numero) avertissements.push("Numéro de facture absent de la feuille.");
   if (!dateDocument) {
     avertissements.push(
       rawDate ? `Date de facture illisible (« ${rawDate} »).` : "Date de facture absente.",
     );
   }
-  return { numero, dateDocument, erreurs, avertissements };
+
+  return { tiers, numero, dateDocument, avertissements };
 }
 
 /**
- * Bloc « Produit » : les lignes et le total de pied.
+ * Bloc « Produits » : les lignes et le pied de tableau.
  * `HT` / `TTC` sont des **prix unitaires**, `Total` porte le montant de la ligne.
  */
 function readProduitBlock(rows: string[][]): {
   lignes: DocumentLine[];
   totalDeclare: number | null;
+  declaredHt: number | null;
+  declaredTvaRate: number | null;
   erreurs: string[];
   avertissements: string[];
 } {
@@ -369,13 +423,17 @@ function readProduitBlock(rows: string[][]): {
   const avertissements: string[] = [];
   const lignes: DocumentLine[] = [];
   let totalDeclare: number | null = null;
-  const headerAt = rowsFindHeader(rows, rowsIndexOfBlock(rows, "produit"), ["quantite"]);
+  let declaredHt: number | null = null;
+  let declaredTvaRate: number | null = null;
+
+  const headerAt = findHeaderRowByKeys(rows, 0, ["quantite", "qte"]);
   if (headerAt < 0) {
-    erreurs.push("En-tête du bloc « Produit » introuvable (colonne « Quantité »).");
-    return { lignes, totalDeclare, erreurs, avertissements };
+    erreurs.push("En-tête du bloc « Produits » introuvable (colonne « Quantité »).");
+    return { lignes, totalDeclare, declaredHt, declaredTvaRate, erreurs, avertissements };
   }
+
   const header = (rows[headerAt] ?? []).map(normalizeCell);
-  const iDesignation = columnIndex(header, ["produit", "designation"]);
+  const iDesignation = columnIndex(header, ["produit", "produits", "designation", "article"]);
   const iQuantite = columnIndex(header, ["quantite", "qte"]);
   const iHt = columnIndex(header, ["ht"]);
   const iTtc = columnIndex(header, ["ttc"]);
@@ -384,16 +442,28 @@ function readProduitBlock(rows: string[][]): {
   for (let i = headerAt + 1; i < rows.length; i += 1) {
     const row = rows[i] ?? [];
     if (row.every((cell) => cell === "")) continue;
-    const normalized = row.map(normalizeCell);
-    const isFooter = normalized.some(
-      (cell) => cell === "total" || cell.startsWith("total "),
-    );
+    const keys = row.map(labelKey);
+    const isFooter = keys.some((key) => key === "total" || key.startsWith("total"));
+
     if (isFooter) {
-      totalDeclare = lastMontantOf(row);
+      // Le pied peut porter trois valeurs (« Total HT | TVA | Total ») : on les
+      // lit par leur colonne, sinon on retombe sur le dernier montant de la ligne.
+      const valueAt = rowsNonEmptyFrom(rows, i + 1);
+      const valueRow = valueAt >= 0 ? (rows[valueAt] ?? []) : [];
+      keys.forEach((key, column) => {
+        if (key === "totalht" || key === "ht") {
+          declaredHt = parseMontant(valueRow[column] ?? "") ?? declaredHt;
+        } else if (key === "tva") {
+          declaredTvaRate = parseMontant(valueRow[column] ?? "") ?? declaredTvaRate;
+        } else if (key === "total" || key === "totalttc") {
+          totalDeclare = parseMontant(valueRow[column] ?? "") ?? totalDeclare;
+        }
+      });
       if (totalDeclare === null) {
-        const next = rowsNonEmptyFrom(rows, i + 1);
-        if (next >= 0) totalDeclare = lastMontantOf(rows[next] ?? []);
+        totalDeclare = declaredHt;
+        if (totalDeclare === null) totalDeclare = lastMontantOf(valueRow);
       }
+      if (totalDeclare === null) totalDeclare = lastMontantOf(row);
       break;
     }
 
@@ -431,7 +501,7 @@ function readProduitBlock(rows: string[][]): {
     lignes.push({ designation, quantite, htUnitaire, ttcUnitaire, totalTtc, taux });
   }
 
-  return { lignes, totalDeclare, erreurs, avertissements };
+  return { lignes, totalDeclare, declaredHt, declaredTvaRate, erreurs, avertissements };
 }
 
 /**
@@ -499,28 +569,28 @@ export function parseFactureExport(text: string): ParseFactureResult {
     .split(/\r?\n/)
     .map((line) => splitDelimitedLine(line, separator));
 
-  const hasBlock = (label: string): boolean =>
-    rows.some((row) => row.some((cell) => normalizeCell(cell) === label));
-
-  for (const [label, human] of [
-    ["clients", "Clients"],
-    ["factures", "Factures"],
-    ["produit", "Produit"],
-  ] as const) {
-    if (!hasBlock(label)) erreurs.push(`Bloc « ${human} » introuvable dans l'export.`);
-  }
-  if (erreurs.length > 0) return { ok: false, erreurs };
-
-  const clients = readClientsBlock(rows);
-  const factures = readFacturesBlock(rows);
+  const identity = readIdentity(rows);
   const produit = readProduitBlock(rows);
-  erreurs.push(...clients.erreurs, ...factures.erreurs, ...produit.erreurs);
-  avertissements.push(
-    ...clients.avertissements,
-    ...factures.avertissements,
-    ...produit.avertissements,
+  erreurs.push(...produit.erreurs);
+  avertissements.push(...identity.avertissements, ...produit.avertissements);
+
+  // Le pied de tableau peut annoncer un HT différent de la somme des lignes :
+  // c'est une formule à vérifier dans la feuille, pas un motif de refus — les
+  // totaux retenus sont **recalculés** depuis les lignes.
+  const htLignes = round2(
+    produit.lignes.reduce((sum, line) => sum + line.quantite * line.htUnitaire, 0),
   );
-  return buildFactureResult(clients, factures, produit, erreurs, avertissements);
+  if (
+    produit.declaredHt !== null &&
+    Math.abs(produit.declaredHt - htLignes) > MONEY_TOLERANCE
+  ) {
+    avertissements.push(
+      `Total HT de la feuille (${produit.declaredHt}) ≠ somme des lignes (${htLignes}) — vérifie la formule du classeur.`,
+    );
+  }
+
+  // `buildFactureResult` attend deux vues de la même identité (client / pièce).
+  return buildFactureResult(identity, identity, produit, erreurs, avertissements);
 }
 
 /* ------------------------------------------------------------------ */

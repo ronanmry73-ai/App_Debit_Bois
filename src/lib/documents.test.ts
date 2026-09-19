@@ -136,7 +136,7 @@ test("refuse un export dont un bloc manque", () => {
   );
   assert.equal(parsed.ok, false);
   if (parsed.ok) return;
-  assert.match(parsed.erreurs.join(" "), /Bloc « Produit » introuvable/);
+  assert.match(parsed.erreurs.join(" "), /Produits » introuvable/);
 });
 
 test("gère les centimes", () => {
@@ -299,6 +299,74 @@ test("CSV point-virgule : une adresse citée ne décale pas les colonnes", () =>
   assert.equal(parsed.facture.tiers.adresse, "78 rue de l'arbre; 73100 Aime");
   assert.equal(parsed.facture.tiers.telephone, "658754815");
   assert.equal(parsed.facture.ttc, 180);
+});
+
+/**
+ * Nouvelle maquette de l'auteur : plus de blocs titrés, des **libellés en
+ * colonne** (valeur à droite, ou en dessous), `Produits` au pluriel, et un pied
+ * `Total HT | TVA | Total`.
+ */
+const EXPORT_V2 = [
+  "",
+  "",
+  "\t73700 Bourg-Saint-Maurice; 961 rue de pinon\t\t\t\t",
+  "\tTelephone\t631857577\t\t\t",
+  "\tMail:\tdsdsdsds@gmail.com\t\t\t",
+  "\t\t\t\t\t",
+  "\tClient\t\t\t\tN° Facture\t",
+  "\tNom\tPrénom\t\t\t2\t",
+  "\tGentil\tRobert\t\t\tDate\t",
+  "\tAdresse\t25 rue du poirier\t\t\t19/09/2026\t",
+  "\tTéléphone\t06 32 52 45 85\t\t\t\t",
+  "\tAdresse mail\tGnagna@gmail.com\t\t\t\t",
+  "\t\t\t\t\t",
+  "\t\t\t\t\t",
+  "Produits\t\t\tQuantité\tHT\tTTC\tTotal",
+  "Table basse\t\t\t3\t150\t180\t540",
+  "Etagère\t\t\t2\t50\t60\t120",
+  "\t\t\t\t\t\t",
+  "\t\t\t\tTotal HT\tTVA\tTotal",
+  "\t\t\t\t 200,00 € \t20%\t 660,00 €",
+].join("\n");
+
+test("nouvelle maquette : libellés en colonne, valeurs à droite ou en dessous", () => {
+  const parsed = parseFactureExport(EXPORT_V2);
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  const f = parsed.facture;
+
+  assert.equal(f.numero, "2", "N° Facture lu sous son libellé");
+  assert.equal(new Date(f.dateDocument ?? "").getDate(), 19);
+  assert.equal(new Date(f.dateDocument ?? "").getMonth(), 8, "septembre");
+
+  // Le bloc émetteur en haut ne doit pas être confondu avec le client.
+  assert.equal(f.tiers.nom, "Gentil");
+  assert.equal(f.tiers.prenom, "Robert");
+  assert.equal(f.tiers.adresse, "25 rue du poirier");
+  assert.equal(f.tiers.telephone, "06 32 52 45 85");
+  assert.equal(f.tiers.email, "Gnagna@gmail.com");
+
+  assert.equal(f.lignes.length, 2);
+  assert.equal(f.lignes[0]?.designation, "Table basse");
+  assert.equal(f.lignes[0]?.quantite, 3);
+  assert.equal(f.lignes[0]?.totalTtc, 540);
+  assert.deepEqual(
+    f.lignes.map((line) => line.taux),
+    [20, 20],
+  );
+
+  // 3 × 150 + 2 × 50 = 550 HT ; 540 + 120 = 660 TTC ; TVA 110.
+  assert.equal(f.ht, 550);
+  assert.equal(f.tva, 110);
+  assert.equal(f.ttc, 660);
+  assert.equal(f.totalDeclare, 660);
+
+  // La feuille annonce « Total HT 200,00 € » alors que les lignes font 550 :
+  // on le signale sans refuser la pièce, et les totaux retenus sont recalculés.
+  assert.ok(
+    f.avertissements.some((line) => /Total HT de la feuille \(200\)/.test(line)),
+    `avertissement attendu, reçu : ${f.avertissements.join(" | ")}`,
+  );
 });
 
 test("countDocuments répartit l'index", () => {
