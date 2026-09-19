@@ -11,6 +11,7 @@ import {
   countDocuments,
   detectSeparator,
   documentKey,
+  manualDocument,
   mergeDocuments,
   parseDateFr,
   parseFactureExport,
@@ -367,6 +368,63 @@ test("nouvelle maquette : libellés en colonne, valeurs à droite ou en dessous"
     f.avertissements.some((line) => /Total HT de la feuille \(200\)/.test(line)),
     `avertissement attendu, reçu : ${f.avertissements.join(" | ")}`,
   );
+});
+
+test("manualDocument : un ticket de caisse saisi à la main", () => {
+  const ticket = manualDocument({
+    kind: "ticket",
+    ttc: 42.5,
+    ht: 42.5,
+    tiersNom: "Brico Dépôt",
+    designation: "Quincaillerie",
+    dateDocument: "2026-09-19T12:00:00.000Z",
+    now: "2026-09-19T18:00:00.000Z",
+  });
+  assert.equal(ticket.kind, "ticket");
+  assert.equal(ticket.numero, "", "un ticket n'a pas de numéro");
+  assert.equal(ticket.ttc, 42.5);
+  assert.equal(ticket.tva, 0);
+  assert.equal(ticket.tiers.nom, "Brico Dépôt");
+  assert.equal(ticket.lignes[0]?.designation, "Quincaillerie");
+  assert.equal(ticket.lignes[0]?.taux, 0);
+  assert.equal(ticket.source, "manuel");
+  assert.equal(ticket.fichier, null);
+  // Sans numéro ni justificatif, la clé d'identité est l'identifiant interne.
+  assert.match(documentKey(ticket), /^id:.+/);
+});
+
+test("manualDocument : facture fournisseur avec TVA déduite", () => {
+  const facture = manualDocument({
+    kind: "facture_fournisseur",
+    numero: "F-2026-0042",
+    ttc: 120,
+    ht: 100,
+    tiersNom: "Panneaux SARL",
+    designation: "Panneaux CP",
+  });
+  assert.equal(facture.numero, "F-2026-0042");
+  assert.equal(facture.ht, 100);
+  assert.equal(facture.tva, 20);
+  assert.equal(facture.lignes[0]?.taux, 20);
+  assert.equal(documentKey(facture), "facture_fournisseur:F-2026-0042");
+});
+
+test("manualDocument : HT = TTC quand aucun taux n'est fourni", () => {
+  const sansTaux = manualDocument({ kind: "ticket", ttc: 120 });
+  assert.equal(sansTaux.ht, 120);
+  assert.equal(sansTaux.tva, 0);
+});
+
+test("mergeDocuments : deux tickets identiques ne se dupliquent pas", () => {
+  const premier = manualDocument({ kind: "ticket", ttc: 30, tiersNom: "Point P" });
+  const base = mergeDocuments([], [premier]);
+  assert.equal(base.added, 1);
+  const second = mergeDocuments(base.documents, [
+    manualDocument({ kind: "ticket", ttc: 30, tiersNom: "Point P" }),
+  ]);
+  // Sans numéro, l'identité repose sur le fichier : deux saisies distinctes
+  // restent deux pièces (aucune confusion possible avec une facture numérotée).
+  assert.equal(second.documents.length, 2);
 });
 
 test("countDocuments répartit l'index", () => {

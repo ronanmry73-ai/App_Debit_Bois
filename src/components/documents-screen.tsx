@@ -9,8 +9,11 @@ import {
   DOCUMENT_KIND_LABELS,
   countDocuments,
   factureToDocument,
+  manualDocument,
   mergeDocuments,
   parseFactureExport,
+  parseMontant,
+  round2,
   type DocumentKind,
   type IndexedDocument,
 } from "@/lib/documents";
@@ -45,6 +48,22 @@ function extensionOf(name: string): string {
   return at >= 0 ? name.slice(at).toLowerCase() : "";
 }
 
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** Date du jour au format d'un champ `<input type="date">`. */
+function todayInput(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+}
+
+/** `aaaa-mm-jj` → ISO calé à midi local (pas de bascule de jour). */
+function inputToIso(value: string): string {
+  const date = new Date(`${value}T12:00:00`);
+  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+}
+
 const EXPORT_EXTENSIONS = [".csv", ".tsv", ".txt", ".xlsx"];
 const JUSTIFICATIF_EXTENSIONS = [".pdf", ".jpg", ".jpeg", ".png", ".webp"];
 
@@ -77,6 +96,23 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
   const [assocFor, setAssocFor] = useState<string | null>(null);
   const [assocDocId, setAssocDocId] = useState("");
   const [excluded, setExcluded] = useState<string[]>([]);
+  const [form, setForm] = useState<{
+    kind: DocumentKind;
+    numero: string;
+    date: string;
+    tiers: string;
+    ttc: string;
+    taux: string;
+    designation: string;
+  }>({
+    kind: "facture_fournisseur",
+    numero: "",
+    date: todayInput(),
+    tiers: "",
+    ttc: "",
+    taux: "20",
+    designation: "",
+  });
 
   const stats = useMemo(() => countDocuments(documents), [documents]);
 
@@ -261,6 +297,38 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
     setMessage(
       `${DOCUMENT_KIND_LABELS[doc.kind]} ${doc.numero || "(sans numéro)"} écarté — le fichier reste archivé.`,
     );
+  }
+
+  /**
+   * Ajout manuel : facture fournisseur, ticket, avoir… Le HT est déduit du TTC et
+   * du taux choisi, et l'identité du document suit les mêmes règles que l'import
+   * (numéro, sinon identifiant interne) — donc pas de doublon possible.
+   */
+  function addManual() {
+    const ttc = parseMontant(form.ttc);
+    if (ttc === null || ttc <= 0) {
+      setMessage("Indique un montant TTC valide (par exemple 42,50).");
+      return;
+    }
+    const taux = Number(form.taux) || 0;
+    const ht = round2(ttc / (1 + taux / 100));
+    const doc = manualDocument({
+      kind: form.kind,
+      numero: form.numero.trim(),
+      dateDocument: inputToIso(form.date),
+      tiersNom: form.tiers.trim(),
+      ttc,
+      ht,
+      designation: form.designation.trim() || DOCUMENT_KIND_LABELS[form.kind],
+    });
+    const outcome = mergeDocuments(documents, [doc]);
+    onDocuments(outcome.documents);
+    setMessage(
+      outcome.added > 0
+        ? `${DOCUMENT_KIND_LABELS[doc.kind]} ajouté${doc.numero ? ` (n° ${doc.numero})` : ""} — ${ht.toFixed(2)} € HT · ${ttc.toFixed(2)} € TTC.`
+        : (outcome.conflits[0] ?? "Ce document est déjà au registre : rien ajouté."),
+    );
+    setForm((current) => ({ ...current, numero: "", ttc: "", designation: "" }));
   }
 
   return (
@@ -475,6 +543,105 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
               })}
             </ul>
           )}
+        </CardContent>
+      </Card>
+
+      <Card className="mt-4">
+        <CardContent className="p-5">
+          <h3 className="font-display text-lg font-medium tracking-tight">
+            Saisir une pièce
+          </h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Pour ce que l’application n’émet pas : facture fournisseur, ticket de caisse, avoir.
+            Le justificatif (photo, scan) se rattache ensuite depuis « À classer ».
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <Label htmlFor="doc-kind">Type</Label>
+              <select
+                id="doc-kind"
+                className="mt-1 flex h-11 w-full rounded-md border border-input bg-card px-3 text-sm"
+                value={form.kind}
+                onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value as DocumentKind }))}
+              >
+                {(Object.keys(DOCUMENT_KIND_LABELS) as DocumentKind[]).map((kind) => (
+                  <option key={kind} value={kind}>
+                    {DOCUMENT_KIND_LABELS[kind]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <Label htmlFor="doc-numero">Numéro (facultatif)</Label>
+              <Input
+                id="doc-numero"
+                className="mt-1"
+                value={form.numero}
+                placeholder="F-2026-0042"
+                onChange={(e) => setForm((f) => ({ ...f, numero: e.target.value }))}
+              />
+            </div>
+            <div>
+              <Label htmlFor="doc-date">Date</Label>
+              <Input
+                id="doc-date"
+                type="date"
+                className="mt-1"
+                value={form.date}
+                onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
+              />
+            </div>
+            <div>
+              <Label htmlFor="doc-tiers">Fournisseur / client</Label>
+              <Input
+                id="doc-tiers"
+                className="mt-1"
+                value={form.tiers}
+                placeholder="Panneaux SARL"
+                onChange={(e) => setForm((f) => ({ ...f, tiers: e.target.value }))}
+              />
+            </div>
+            <div>
+              <Label htmlFor="doc-ttc">Montant TTC</Label>
+              <Input
+                id="doc-ttc"
+                className="mt-1"
+                value={form.ttc}
+                placeholder="120,00"
+                onChange={(e) => setForm((f) => ({ ...f, ttc: e.target.value }))}
+              />
+            </div>
+            <div>
+              <Label htmlFor="doc-taux">TVA</Label>
+              <select
+                id="doc-taux"
+                className="mt-1 flex h-11 w-full rounded-md border border-input bg-card px-3 text-sm"
+                value={form.taux}
+                onChange={(e) => setForm((f) => ({ ...f, taux: e.target.value }))}
+              >
+                {["0", "2.1", "5.5", "10", "20"].map((rate) => (
+                  <option key={rate} value={rate}>
+                    {rate.replace(".", ",")} %
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <Label htmlFor="doc-designation">Désignation</Label>
+              <Input
+                id="doc-designation"
+                className="mt-1"
+                value={form.designation}
+                placeholder="Quincaillerie"
+                onChange={(e) => setForm((f) => ({ ...f, designation: e.target.value }))}
+              />
+            </div>
+            <div className="flex items-end">
+              <Button type="button" onClick={addManual}>
+                Ajouter au registre
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

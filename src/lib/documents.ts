@@ -675,15 +675,22 @@ export function manualDocument(opts: {
 /* Fusion idempotente                                                  */
 /* ------------------------------------------------------------------ */
 
-/** Clé d'identité d'un document : son numéro, sinon l'empreinte de son fichier. */
+/**
+ * Clé d'identité d'un document : son numéro, sinon l'empreinte de son fichier,
+ * sinon son chemin, et en dernier recours son **identifiant interne** — deux
+ * tickets saisis à la main (sans numéro ni justificatif) sont deux pièces
+ * distinctes, pas un doublon.
+ */
 export function documentKey(
-  doc: Pick<IndexedDocument, "kind" | "numero" | "fichier">,
+  doc: Pick<IndexedDocument, "kind" | "numero" | "fichier"> & { id?: string },
 ): string {
   const numero = String(doc.numero ?? "").trim();
   if (numero) return `${doc.kind}:${numero}`;
   const empreinte = doc.fichier?.empreinte;
   if (empreinte) return `fp:${empreinte}`;
-  return `f:${doc.fichier?.chemin ?? ""}`;
+  const chemin = doc.fichier?.chemin;
+  if (chemin) return `f:${chemin}`;
+  return `id:${doc.id ?? ""}`;
 }
 
 export type MergeOutcome = {
