@@ -65,6 +65,8 @@ export type DebitBoisDesktop = {
   archivePendingJournal?: (hintJson?: string) => Promise<PendingJournalArchive | null>;
   /** Registre des documents : dépôt, classement dans `factures/`, lecture. */
   documentsListInbox?: (hintJson?: string) => Promise<DocumentsInbox | null>;
+  /** Ouvre le dossier de dépôt (`factures/_a_classer`) dans l'explorateur. */
+  documentsOpenInbox?: (hintJson?: string) => Promise<boolean>;
   documentsPickFolder?: () => Promise<string | null>;
   documentsListFolder?: (
     folder: string,

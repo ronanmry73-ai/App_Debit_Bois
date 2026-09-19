@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld("debitBoisDesktop", {
     ipcRenderer.invoke("debit-bois:archive-pending-journal", hintJson),
   documentsListInbox: (hintJson) =>
     ipcRenderer.invoke("debit-bois:documents-list-inbox", hintJson),
+  documentsOpenInbox: (hintJson) =>
+    ipcRenderer.invoke("debit-bois:documents-open-inbox", hintJson),
   documentsPickFolder: () => ipcRenderer.invoke("debit-bois:documents-pick-folder"),
   documentsListFolder: (folder, extensions) =>
     ipcRenderer.invoke("debit-bois:documents-list-folder", folder, extensions),

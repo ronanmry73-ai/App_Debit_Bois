@@ -15,6 +15,8 @@ import {
   resolveBackupDir,
 } from "./drive-backup.mjs";
 import {
+  ensureDir,
+  inboxPath,
   listFolder,
   listInbox,
   readTextSmart,
@@ -295,7 +297,25 @@ function backupDirFrom(hintJson) {
  */
 function registerDocumentsIpc() {
   ipcMain.handle("debit-bois:documents-list-inbox", async (_event, hintJson) => {
-    return listInbox(backupDirFrom(hintJson));
+    const dir = backupDirFrom(hintJson);
+    // Le dossier de dépôt est créé au besoin : on doit pouvoir y déposer un
+    // justificatif avant même qu'un premier fichier y ait été classé.
+    try {
+      await ensureDir(inboxPath(dir));
+    } catch {
+      /* dossier inaccessible : la liste vide le dira */
+    }
+    return listInbox(dir);
+  });
+  ipcMain.handle("debit-bois:documents-open-inbox", async (_event, hintJson) => {
+    const folder = inboxPath(backupDirFrom(hintJson));
+    try {
+      await ensureDir(folder);
+    } catch {
+      return false;
+    }
+    const error = await shell.openPath(folder);
+    return !error;
   });
   ipcMain.handle("debit-bois:documents-pick-folder", async () => {
     const win = BrowserWindow.getFocusedWindow() || mainWindow;

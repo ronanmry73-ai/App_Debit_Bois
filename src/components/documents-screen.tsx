@@ -93,6 +93,7 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
   const [filter, setFilter] = useState<Filter>("tous");
   const [query, setQuery] = useState("");
   const [inbox, setInbox] = useState<DocumentsInboxFile[]>([]);
+  const [inboxDir, setInboxDir] = useState("");
   const [assocFor, setAssocFor] = useState<string | null>(null);
   const [assocDocId, setAssocDocId] = useState("");
   const [excluded, setExcluded] = useState<string[]>([]);
@@ -121,6 +122,7 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
     if (!api?.documentsListInbox) return;
     const res = await api.documentsListInbox(hintJson);
     setInbox(res?.files ?? []);
+    setInboxDir(res?.dir ?? "");
     if (res && res.ok === false) setMessage(res.error ?? "Dossier de dépôt illisible.");
   }, [hintJson]);
 
@@ -329,6 +331,21 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
         : (outcome.conflits[0] ?? "Ce document est déjà au registre : rien ajouté."),
     );
     setForm((current) => ({ ...current, numero: "", ttc: "", designation: "" }));
+  }
+
+  /** Ouvre le dossier de dépôt dans l'explorateur Windows. */
+  async function openInbox() {
+    const api = desktopApi();
+    if (!api?.documentsOpenInbox) {
+      setMessage("Ouverture du dossier réservée à l’application PC.");
+      return;
+    }
+    const opened = await api.documentsOpenInbox(hintJson);
+    if (!opened) {
+      setMessage(
+        "Dossier de dépôt introuvable — vérifie que le dossier de sauvegarde Drive est accessible.",
+      );
+    }
   }
 
   return (
@@ -653,10 +670,25 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
                 À classer
               </h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                {inbox.length} fichier{inbox.length > 1 ? "s" : ""} dans{" "}
-                <code>factures/_a_classer</code> — dépose tes justificatifs là, puis rattache-les à
-                une pièce.
+                {inbox.length} fichier{inbox.length > 1 ? "s" : ""} dans le dossier de dépôt —
+                dépose tes justificatifs là, puis rattache-les à une pièce.
               </p>
+              {inboxDir ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  <code>{inboxDir}</code>
+                </p>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void openInbox()}
+                disabled={!inboxDir}
+              >
+                <FolderOpen />
+                Ouvrir le dossier
+              </Button>
             </div>
           </div>
 
