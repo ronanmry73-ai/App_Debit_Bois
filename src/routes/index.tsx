@@ -493,6 +493,12 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
     };
   }, [hydrated, terrain]);
 
+  /**
+   * Chantier choisi **sur le téléphone** : tant qu'il est renseigné, le
+   * rafraîchissement Drive ne ramène pas l'écran sur le projet ouvert au PC.
+   */
+  const phoneProjectRef = useRef<string | null>(null);
+
   const phoneDrive = useTerrainDrive({
     enabled: terrain && !desktopApi(),
     hydrated,
@@ -504,6 +510,13 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
         emptyRow: INITIAL_EMPTY_ROW,
       });
       applyPersisted(saved, false, { keepPendingMoves: true });
+      // Le téléphone garde le chantier qu'on y a choisi : le miroir apporte les
+      // données, pas la sélection de l'écran.
+      const pinned = phoneProjectRef.current;
+      if (terrain && pinned) {
+        const keep = saved.projects.find((p) => p.id === pinned);
+        if (keep) applyProjectData(keep);
+      }
       // Accusé de réception : le PC publie dans le miroir les mouvements qu'il a
       // réellement appliqués. Un envoi réussi ne prouve pas qu'il les a lus :
       // tant qu'un mouvement n'est pas confirmé, il reste dans la file locale et
@@ -1181,7 +1194,12 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
     );
   }
 
-  function openProject(p: Project) {
+  /**
+   * Applique les données d'un projet **sans** changer de vue ni afficher de
+   * message : sert aussi au téléphone, qui garde son chantier choisi quand le
+   * miroir Drive est rafraîchi.
+   */
+  function applyProjectData(p: Project) {
     skipNextPack.current = true;
     skipWastePrefill.current = true;
     lastPlanId.current = "";
@@ -1193,6 +1211,10 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
     setCalculatedAt(p.calculatedAt ?? null);
     setQuoteIssuedAt(p.quoteIssuedAt ?? null);
     rememberSaved(p);
+  }
+
+  function openProject(p: Project) {
+    applyProjectData(p);
     setError(null);
     setFlash(`Projet « ${p.name} » ouvert.`);
     setCatalogOpen(false);
@@ -1653,6 +1675,33 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
                 void phoneDrive.repairPending();
               }}
             />
+            {projects.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <label htmlFor="terrain-project" className="text-sm text-muted-foreground">
+                  Chantier
+                </label>
+                <select
+                  id="terrain-project"
+                  className="flex h-11 min-w-48 flex-1 rounded-md border border-input bg-card px-3 text-sm"
+                  value={currentProjectId ?? ""}
+                  onChange={(event) => {
+                    const next = projects.find((p) => p.id === event.target.value);
+                    if (!next) return;
+                    phoneProjectRef.current = next.id;
+                    openProject(next);
+                  }}
+                >
+                  <option value="">— choisir un chantier —</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {isProjectFinished(p) ? " (terminé)" : ""}
+                      {p.clientName ? ` — ${p.clientName}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
             <p className="text-xs text-muted-foreground">
               {phoneDrive.status.linked
                 ? "Stock, plans et devis viennent du PC. Tes mouvements partent dans le carnet, en attente d’application à l’atelier."
