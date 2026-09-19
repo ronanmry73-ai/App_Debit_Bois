@@ -11,6 +11,7 @@ import {
   type WorkshopPrefs,
 } from "./presets.ts";
 import { snapshotProject, migrateProject, type Project } from "./projects.ts";
+import { type IndexedDocument } from "./documents.ts";
 import { migratePieceRows } from "./piece-io.ts";
 import {
   exampleStock,
@@ -50,6 +51,12 @@ export type PersistedState = {
   quoteIssuedAt: string | null;
   pendingMoves: PendingMove[];
   appliedMoveIds: string[];
+  /**
+   * Registre des documents (factures clients, fournisseurs, tickets).
+   * Champ **additif** : la version reste 5, donc les fichiers enregistrés avant
+   * son introduction restent lisibles et le miroir reste accepté par le téléphone.
+   */
+  documents: IndexedDocument[];
 };
 
 export function emptyMeta(): ProjectMeta {
@@ -71,6 +78,28 @@ function rowsHaveWork(rows: PieceRow[]): boolean {
       String(r.length ?? "").trim() !== "" &&
       String(r.width ?? "").trim() !== "",
   );
+}
+
+/**
+ * Registre des documents : champ **additif** au format v5, donc les fichiers
+ * enregistrés avant son introduction restent lisibles, et un téléphone qui ne le
+ * connaît pas continue d'accepter le miroir.
+ */
+function migrateDocuments(raw: unknown): IndexedDocument[] {
+  if (!Array.isArray(raw)) return [];
+  const out: IndexedDocument[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue;
+    const doc = row as IndexedDocument;
+    if (typeof doc.id !== "string" || !doc.id) continue;
+    out.push({
+      ...doc,
+      lignes: Array.isArray(doc.lignes) ? doc.lignes : [],
+      avertissements: Array.isArray(doc.avertissements) ? doc.avertissements : [],
+      tiers: doc.tiers && typeof doc.tiers === "object" ? doc.tiers : { nom: "" },
+    });
+  }
+  return out;
 }
 
 export function migrateState(
@@ -95,6 +124,7 @@ export function migrateState(
     quoteIssuedAt: null,
     pendingMoves: [],
     appliedMoveIds: [],
+    documents: [],
   };
   if (!raw || typeof raw !== "object") return base;
   const o = raw as Record<string, unknown>;
@@ -183,6 +213,7 @@ export function migrateState(
     quoteIssuedAt,
     pendingMoves,
     appliedMoveIds,
+    documents: migrateDocuments(o.documents),
   };
 }
 

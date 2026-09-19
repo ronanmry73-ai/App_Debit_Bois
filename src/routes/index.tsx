@@ -27,6 +27,7 @@ import { DriveLinkBar } from "@/components/drive-link-bar";
 import { CatalogPanel } from "@/components/catalog-panel";
 import { ProjectsBar } from "@/components/projects-bar";
 import { ProjectsHistory } from "@/components/projects-history";
+import { DocumentsScreen } from "@/components/documents-screen";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { JobNeedPanel } from "@/components/job-need-panel";
 import { SupplierCostPanel } from "@/components/supplier-cost-panel";
@@ -127,6 +128,7 @@ import {
   serializeMovementJournal,
   type PendingMove,
 } from "@/lib/movements";
+import type { IndexedDocument } from "@/lib/documents";
 import { terrainPreferenceFromSearch, useTerrainMode, type TerrainPreference } from "@/lib/terrain";
 import { useTerrainDrive } from "@/lib/use-terrain-drive";
 
@@ -260,9 +262,13 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [projectMeta, setProjectMeta] = useState<ProjectMeta>(emptyMeta);
+  /** Registre des documents importés (factures, tickets). */
+  const [documents, setDocuments] = useState<IndexedDocument[]>([]);
   /** Écran « Historique des chantiers » + chantier à clôturer en arrivant. */
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyFinishId, setHistoryFinishId] = useState<string | null>(null);
+  /** Écran « Registre des documents » : factures, fournisseurs, tickets. */
+  const [documentsOpen, setDocumentsOpen] = useState(false);
   const [usedRefIds, setUsedRefIds] = useState<string[]>([]);
   const [stockDeduction, setStockDeduction] = useState<StockDeduction | null>(null);
   const [savedFp, setSavedFp] = useState("");
@@ -351,6 +357,7 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
     setMoves(saved.moves);
     setCatalog(saved.catalog);
     setProjects(saved.projects);
+    setDocuments(saved.documents ?? []);
     setProjectMeta(saved.projectMeta);
     setUsedRefIds(saved.usedRefIds);
     setSelected(saved.selectedStrategy || "mixed");
@@ -527,6 +534,7 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
         quoteIssuedAt,
         pendingMoves,
         appliedMoveIds,
+        documents,
       });
     }, 280);
     return () => clearTimeout(t);
@@ -548,6 +556,7 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
     quoteIssuedAt,
     pendingMoves,
     appliedMoveIds,
+    documents,
   ]);
 
   useEffect(() => {
@@ -1229,6 +1238,7 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
       quoteIssuedAt,
       pendingMoves,
       appliedMoveIds,
+      documents,
     };
   }
 
@@ -1647,6 +1657,15 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
           shellWidth,
         )}
       >
+        {documentsOpen && (
+          <DocumentsScreen
+            documents={documents}
+            onDocuments={setDocuments}
+            hintJson={JSON.stringify({ workshopPrefs })}
+            onBack={() => setDocumentsOpen(false)}
+          />
+        )}
+
         {historyOpen && (
           <ProjectsHistory
             projects={projects}
@@ -1824,6 +1843,7 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
                 void handleImportJournal();
               }}
               onHistory={() => openHistory(null)}
+              onDocuments={() => setDocumentsOpen(true)}
               onFinish={() => openHistory(currentProjectId)}
               canFinish={currentProject ? !isProjectFinished(currentProject) : false}
               jobStatus={jobStatus}

@@ -14,6 +14,12 @@ import {
   readPendingJournalFile,
   resolveBackupDir,
 } from "./drive-backup.mjs";
+import {
+  listFolder,
+  listInbox,
+  readTextSmart,
+  storeDocumentFile,
+} from "./documents-files.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -264,7 +270,79 @@ async function restoreDriveBackup() {
   return { restored: true };
 }
 
+/** Gestionnaires du carnet téléphone (lecture et archivage sur le dossier Drive). */
+function registerJournalIpc() {
+  ipcMain.handle("debit-bois:read-pending-journal", async (_event, hintJson) => {
+    return readPendingJournalFile(backupDirFrom(hintJson));
+  });
+  ipcMain.handle("debit-bois:archive-pending-journal", async (_event, hintJson) => {
+    return archivePendingJournalFile({ dir: backupDirFrom(hintJson) });
+  });
+}
+
+/** Dossier de sauvegarde réellement visé par un appel venu du rendu. */
+function backupDirFrom(hintJson) {
+  return resolveBackupDir(
+    typeof hintJson === "string" && hintJson.trim() ? hintJson : lastKnownBackupDir(),
+  );
+}
+
+/**
+ * Gestionnaires du **registre des documents** : dossier de dépôt, choix d'un
+ * dossier d'exports, lecture d'un export, classement d'un justificatif,
+ * ouverture de la copie. Séparés de `registerStoreIpc` pour rester lisibles.
+ */
+function registerDocumentsIpc() {
+  ipcMain.handle("debit-bois:documents-list-inbox", async (_event, hintJson) => {
+    return listInbox(backupDirFrom(hintJson));
+  });
+  ipcMain.handle("debit-bois:documents-pick-folder", async () => {
+    const win = BrowserWindow.getFocusedWindow() || mainWindow;
+    const { canceled, filePaths } = await dialog.showOpenDialog(win ?? undefined, {
+      title: "Dossier des exports de factures",
+      properties: ["openDirectory"],
+    });
+    if (canceled || !filePaths?.[0]) return null;
+    return filePaths[0];
+  });
+  ipcMain.handle("debit-bois:documents-list-folder", async (_event, folder, extensions) =>
+    listFolder(
+      typeof folder === "string" ? folder : "",
+      Array.isArray(extensions)
+        ? extensions.filter((value) => typeof value === "string")
+        : undefined,
+    ),
+  );
+  ipcMain.handle("debit-bois:documents-read-text", async (_event, file) => {
+    if (typeof file !== "string" || !file) {
+      return { ok: false, text: "", error: "Chemin manquant." };
+    }
+    return readTextSmart(file);
+  });
+  ipcMain.handle("debit-bois:documents-store-file", async (_event, payload) => {
+    const body = payload && typeof payload === "object" ? payload : {};
+    return storeDocumentFile({
+      dir: backupDirFrom(body.hintJson),
+      sourcePath: typeof body.sourcePath === "string" ? body.sourcePath : "",
+      kind: typeof body.kind === "string" ? body.kind : "autre",
+      numero: typeof body.numero === "string" ? body.numero : "",
+      dateDocument: typeof body.dateDocument === "string" ? body.dateDocument : null,
+    });
+  });
+  ipcMain.handle("debit-bois:documents-open-file", async (_event, payload) => {
+    const body = payload && typeof payload === "object" ? payload : {};
+    const chemin = typeof body.chemin === "string" ? body.chemin : "";
+    if (!chemin) return false;
+    const full = path.join(backupDirFrom(body.hintJson), ...chemin.split("/"));
+    if (!existsSync(full)) return false;
+    await shell.openPath(full);
+    return true;
+  });
+}
+
 function registerStoreIpc() {
+  registerDocumentsIpc();
+  registerJournalIpc();
   ipcMain.handle("debit-bois:read-store", async () => {
     try { return await readFile(storePath(), "utf8"); } catch { return null; }
   });
@@ -280,22 +358,6 @@ function registerStoreIpc() {
   });
   ipcMain.handle("debit-bois:get-drive-status", () => probeDriveStatus());
   ipcMain.handle("debit-bois:restore-drive-backup", async () => restoreDriveBackup());
-  ipcMain.handle("debit-bois:read-pending-journal", async (_event, hintJson) => {
-    const dir = resolveBackupDir(
-      typeof hintJson === "string" && hintJson.trim()
-        ? hintJson
-        : lastKnownBackupDir(),
-    );
-    return readPendingJournalFile(dir);
-  });
-  ipcMain.handle("debit-bois:archive-pending-journal", async (_event, hintJson) => {
-    const dir = resolveBackupDir(
-      typeof hintJson === "string" && hintJson.trim()
-        ? hintJson
-        : lastKnownBackupDir(),
-    );
-    return archivePendingJournalFile({ dir });
-  });
   ipcMain.handle("debit-bois:export-file", async (_event, suggestedName, content) => {
     const win = BrowserWindow.getFocusedWindow() || mainWindow;
     const defaultName = typeof suggestedName === "string" && suggestedName.trim() ? suggestedName.trim() : "projet-debit-bois.json";

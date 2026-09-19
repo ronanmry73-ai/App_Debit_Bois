@@ -30,6 +30,8 @@ type Props = {
   onImportJournal: () => void;
   /** Ouvre l'écran d'historique des chantiers. */
   onHistory: () => void;
+  /** Ouvre le registre des documents (factures, fournisseurs, tickets). */
+  onDocuments: () => void;
   /** Ouvre l'historique avec le formulaire de clôture du projet courant. */
   onFinish: () => void;
   /** Un projet enregistré et encore en cours peut être clôturé. */
@@ -68,6 +70,7 @@ export function ProjectsBar({
   onImport,
   onImportJournal,
   onHistory,
+  onDocuments,
   onFinish,
   canFinish,
   jobStatus,
@@ -131,6 +134,9 @@ export function ProjectsBar({
               </Button>
               <Button type="button" variant="outline" onClick={onHistory}>
                 Historique des chantiers
+              </Button>
+              <Button type="button" variant="outline" onClick={onDocuments}>
+                Registre des documents
               </Button>
               {canFinish ? (
                 <Button type="button" variant="outline" onClick={onFinish}>

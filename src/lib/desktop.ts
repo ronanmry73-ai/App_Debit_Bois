@@ -20,6 +20,37 @@ export type PendingJournalArchive = {
   error?: string | null;
 };
 
+export type DocumentsInboxFile = {
+  name: string;
+  path: string;
+  taille: number;
+  mtime: string;
+};
+
+export type DocumentsInbox = {
+  ok: boolean;
+  dir?: string;
+  files: DocumentsInboxFile[];
+  error?: string | null;
+};
+
+export type DocumentsStored = {
+  ok: boolean;
+  chemin?: string;
+  empreinte?: string;
+  taille?: number;
+  created?: boolean;
+  error?: string | null;
+};
+
+export type DocumentsText = {
+  ok: boolean;
+  text: string;
+  encoding?: string;
+  taille?: number;
+  error?: string | null;
+};
+
 export type DebitBoisDesktop = {
   isDesktop: boolean;
   platform?: string;
@@ -32,6 +63,22 @@ export type DebitBoisDesktop = {
   restoreDriveBackup?: () => Promise<{ restored: boolean }>;
   readPendingJournal?: (hintJson?: string) => Promise<PendingJournalRead | null>;
   archivePendingJournal?: (hintJson?: string) => Promise<PendingJournalArchive | null>;
+  /** Registre des documents : dépôt, classement dans `factures/`, lecture. */
+  documentsListInbox?: (hintJson?: string) => Promise<DocumentsInbox | null>;
+  documentsPickFolder?: () => Promise<string | null>;
+  documentsListFolder?: (
+    folder: string,
+    extensions?: string[],
+  ) => Promise<{ ok: boolean; files: DocumentsInboxFile[]; error?: string | null } | null>;
+  documentsReadText?: (file: string) => Promise<DocumentsText | null>;
+  documentsStoreFile?: (payload: {
+    hintJson?: string;
+    sourcePath: string;
+    kind?: string;
+    numero?: string;
+    dateDocument?: string | null;
+  }) => Promise<DocumentsStored | null>;
+  documentsOpenFile?: (payload: { hintJson?: string; chemin: string }) => Promise<boolean>;
   onDriveStatus?: (cb: (status: DriveBackupStatus) => void) => () => void;
   onStoreRestored?: (cb: (json: string) => void) => () => void;
   onPendingJournalCheck?: (cb: () => void) => () => void;

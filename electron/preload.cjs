@@ -15,6 +15,17 @@ contextBridge.exposeInMainWorld("debitBoisDesktop", {
     ipcRenderer.invoke("debit-bois:read-pending-journal", hintJson),
   archivePendingJournal: (hintJson) =>
     ipcRenderer.invoke("debit-bois:archive-pending-journal", hintJson),
+  documentsListInbox: (hintJson) =>
+    ipcRenderer.invoke("debit-bois:documents-list-inbox", hintJson),
+  documentsPickFolder: () => ipcRenderer.invoke("debit-bois:documents-pick-folder"),
+  documentsListFolder: (folder, extensions) =>
+    ipcRenderer.invoke("debit-bois:documents-list-folder", folder, extensions),
+  documentsReadText: (file) =>
+    ipcRenderer.invoke("debit-bois:documents-read-text", file),
+  documentsStoreFile: (payload) =>
+    ipcRenderer.invoke("debit-bois:documents-store-file", payload),
+  documentsOpenFile: (payload) =>
+    ipcRenderer.invoke("debit-bois:documents-open-file", payload),
   onDriveStatus: (cb) => {
     if (typeof cb !== "function") return () => {};
     const wrapped = (_event, status) => cb(status);
