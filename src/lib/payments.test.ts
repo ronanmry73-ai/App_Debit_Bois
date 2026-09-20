@@ -13,6 +13,7 @@ import {
 	construireEcheancier,
 	documentMontant,
 	echeanceDuDocument,
+	estimerTva,
 	joursDeRetard,
 	montantAffecteAuMouvement,
 	montantRegle,
@@ -237,6 +238,56 @@ test("retirer une affectation rend le reste dû", () => {
 	assert.equal(resteDuDocument(doc, lesDeux), 460);
 	const apres = retirerAffectation(lesDeux, "aff-1");
 	assert.equal(resteDuDocument(doc, apres), 660);
+});
+
+test("TVA estimée : collectée, déductible, et les deux lectures", () => {
+	const vente = facture({ id: "doc-vente", numero: "1", ttc: 660, ht: 550 });
+	const achat = facture({
+		id: "doc-achat",
+		numero: "F-1",
+		kind: "facture_fournisseur",
+		ttc: 120,
+		ht: 100,
+	});
+
+	const sansAffectation = estimerTva([vente, achat], []);
+	assert.equal(sansAffectation.collectee, 110);
+	assert.equal(sansAffectation.deductible, 20);
+	assert.equal(sansAffectation.solde, 90, "facturé : 110 − 20");
+	// Régime des encaissements : rien n'est encore rentré ni payé.
+	assert.equal(sansAffectation.collecteeEncaissements, 0);
+	assert.equal(sansAffectation.soldeEncaissements, 0);
+
+	// Un acompte de la moitié de la facture fait entrer la moitié de la TVA.
+	const acompte = [affectation({ id: "aff-1", documentId: "doc-vente", montant: 330 })];
+	const avecAcompte = estimerTva([vente, achat], acompte);
+	assert.equal(avecAcompte.collectee, 110, "la lecture « débits » ne bouge pas");
+	assert.equal(avecAcompte.collecteeEncaissements, 55);
+	assert.equal(avecAcompte.soldeEncaissements, 55);
+});
+
+test("TVA estimée : un avoir en déduction, les pièces sans TVA signalées", () => {
+	const vente = facture({ id: "doc-vente", numero: "1", ttc: 660, ht: 550 });
+	const avoir = facture({
+		id: "doc-avoir",
+		numero: "AV-1",
+		kind: "avoir_client",
+		ttc: 60,
+		ht: 50,
+	});
+	const ticket = manualDocument({
+		id: "doc-ticket",
+		kind: "ticket",
+		ttc: 30,
+		ht: 30,
+		tiersNom: "Point P",
+	});
+
+	const estimation = estimerTva([vente, avoir, ticket], []);
+	assert.equal(estimation.collectee, 100, "110 − 10 d'avoir");
+	assert.equal(estimation.deductible, 0, "le ticket est à taux 0");
+	assert.equal(estimation.solde, 100);
+	assert.equal(estimation.piecesSansTva, 1, "le ticket est signalé");
 });
 
 test("mouvements non affectés : ceux qui ont encore du reste, du plus ancien au plus récent", () => {

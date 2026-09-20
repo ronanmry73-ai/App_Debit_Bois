@@ -369,6 +369,78 @@ export function mouvementsNonAffectes(
 }
 
 /* ------------------------------------------------------------------ */
+/* TVA estimée                                                         */
+/* ------------------------------------------------------------------ */
+
+export type EstimationTva = {
+  /** TVA sur les pièces clients (lecture « sur les débits », c'est-à-dire facturé). */
+  collectee: number;
+  /** TVA sur les achats justifiés (factures fournisseurs, tickets). */
+  deductible: number;
+  solde: number;
+  /** TVA au rythme des règlements reçus (lecture « sur les encaissements »). */
+  collecteeEncaissements: number;
+  deductibleDecaissements: number;
+  soldeEncaissements: number;
+  /** Pièces sans TVA (taux 0) : à vérifier, ce sont souvent des oublis. */
+  piecesSansTva: number;
+};
+
+function tvaDuDocument(doc: IndexedDocument): number {
+  return round2(Math.max(0, doc.ttc - doc.ht)) * documentSign(doc.kind);
+}
+
+/** Part réglée d'une pièce, bornée à 1 (un trop-perçu ne crée pas de TVA en plus). */
+function partReglee(doc: IndexedDocument, affectations: readonly Affectation[]): number {
+  if (Math.abs(doc.ttc) <= CENT) return 0;
+  const regle = montantRegle(doc.id, affectations);
+  return Math.min(1, Math.max(0, regle / doc.ttc));
+}
+
+/**
+ * Estimation de TVA — **indicative**, jamais une déclaration.
+ *
+ * Deux lectures, parce que le régime change tout : **sur les débits** (ce qui est
+ * facturé) et **sur les encaissements** (ce qui est réellement rentré). Le montant
+ * exact dépend du régime, des taux appliqués et des justificatifs d'achat : la
+ * déclaration reste au comptable.
+ */
+export function estimerTva(
+  documents: readonly IndexedDocument[],
+  affectations: readonly Affectation[],
+): EstimationTva {
+  let collectee = 0;
+  let deductible = 0;
+  let collecteeEncaissements = 0;
+  let deductibleDecaissements = 0;
+  let piecesSansTva = 0;
+
+  for (const doc of documents) {
+    const tva = tvaDuDocument(doc);
+    if (Math.abs(tva) <= CENT) piecesSansTva += 1;
+    const part = partReglee(doc, affectations);
+    const coteClient = doc.kind === "facture_client" || doc.kind === "avoir_client";
+    if (coteClient) {
+      collectee = round2(collectee + tva);
+      collecteeEncaissements = round2(collecteeEncaissements + tva * part);
+    } else {
+      deductible = round2(deductible + tva);
+      deductibleDecaissements = round2(deductibleDecaissements + tva * part);
+    }
+  }
+
+  return {
+    collectee,
+    deductible,
+    solde: round2(collectee - deductible),
+    collecteeEncaissements,
+    deductibleDecaissements,
+    soldeEncaissements: round2(collecteeEncaissements - deductibleDecaissements),
+    piecesSansTva,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Tableau de bord                                                     */
 /* ------------------------------------------------------------------ */
 

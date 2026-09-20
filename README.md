@@ -62,6 +62,7 @@ L'argent qui bouge réellement : **mouvements** (encaissements, décaissements) 
 - **Écran Trésorerie** : tuiles *Facturé aux clients · Encaissé · Reste à encaisser · Dont en retard · Sorties · Solde suivi* ; saisie d'un mouvement (sens, date, montant, compte, moyen, référence) ; listes **À encaisser** (clients) et **À payer** (fournisseurs, tickets) avec lettrage en deux clics — montant pré-rempli au plus petit des deux restes, et **seuls les mouvements du bon sens sont proposés** (on n'encaisse pas une facture fournisseur) ; liste des mouvements avec leur **reste non affecté** ; **soldes suivis** par compte (ouverture + entrées − sorties).
 - **Échéances** : celle de la pièce si elle en porte une, sinon **date + 30 jours** ; les retards sont signalés en rouge.
 - **Solde suivi, pas solde bancaire** : il ne connaît que ce que tu saisis. Le pointage viendra plus tard.
+- **TVA estimée (indicative)** : deux lectures affichées côte à côte — *sur les débits* (ce qui est facturé) et *sur les encaissements* (ce qui est réellement rentré, au prorata des règlements). Ce n'est **pas une déclaration** ni un montant « à payer » : le régime, les taux et les justificatifs d'achat se valident avec le comptable. Les pièces à taux 0 sont signalées.
 
 Accès par **Trésorerie** dans la barre du haut (sur le PC).
 

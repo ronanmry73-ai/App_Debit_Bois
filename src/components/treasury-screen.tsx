@@ -14,6 +14,7 @@ import {
 	affecter,
 	compteLabel,
 	construireEcheancier,
+	estimerTva,
 	formatEuros,
 	montantRegle,
 	mouvementsNonAffectes,
@@ -106,6 +107,7 @@ export function TreasuryScreen({
 		[documents, affectations],
 	);
 	const soldes = useMemo(() => soldesSuivis(comptes, mouvements), [comptes, mouvements]);
+	const tva = useMemo(() => estimerTva(documents, affectations), [documents, affectations]);
 	const libres = useMemo(
 		() => mouvementsNonAffectes(mouvements, affectations),
 		[mouvements, affectations],
@@ -630,6 +632,49 @@ export function TreasuryScreen({
 							</li>
 						))}
 					</ul>
+				</CardContent>
+			</Card>
+
+			<Card className="mt-4">
+				<CardContent className="p-5">
+					<h3 className="font-display text-lg font-medium tracking-tight">
+						TVA estimée (indicative)
+					</h3>
+					<p className="mt-1 text-sm text-muted-foreground">
+						Calculée depuis tes pièces — <strong>ce n’est pas une déclaration</strong>, et ce
+						n’est pas un montant « à payer ». Il dépend de ton régime, des taux appliqués et de
+						tous tes justificatifs d’achat : à confirmer avec ton comptable.
+					</p>
+					<ul className="mt-3 divide-y divide-border overflow-hidden rounded-lg border border-border">
+						<li className="flex flex-wrap items-center justify-between gap-2 bg-card px-3 py-3">
+							<div>
+								<p className="font-medium">Sur les débits (ce qui est facturé)</p>
+								<p className="text-xs text-muted-foreground">
+									Collectée {formatEuros(tva.collectee)} − déductible{" "}
+									{formatEuros(tva.deductible)}
+								</p>
+							</div>
+							<span className="font-medium">{formatEuros(tva.solde)}</span>
+						</li>
+						<li className="flex flex-wrap items-center justify-between gap-2 bg-card px-3 py-3">
+							<div>
+								<p className="font-medium">
+									Sur les encaissements (ce qui est réellement rentré)
+								</p>
+								<p className="text-xs text-muted-foreground">
+									Collectée {formatEuros(tva.collecteeEncaissements)} − déductible{" "}
+									{formatEuros(tva.deductibleDecaissements)}
+								</p>
+							</div>
+							<span className="font-medium">{formatEuros(tva.soldeEncaissements)}</span>
+						</li>
+					</ul>
+					{tva.piecesSansTva > 0 ? (
+						<p className="mt-2 text-xs text-muted-foreground">
+							{tva.piecesSansTva} pièce{tva.piecesSansTva > 1 ? "s" : ""} sans TVA (taux 0 ou
+							justificatif manquant) — à vérifier.
+						</p>
+					) : null}
 				</CardContent>
 			</Card>
 
