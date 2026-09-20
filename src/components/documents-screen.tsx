@@ -18,11 +18,22 @@ import {
   type IndexedDocument,
 } from "@/lib/documents";
 import { formatDay } from "@/lib/projects";
+import {
+  CENT,
+  STATUT_REGLEMENT_LABELS,
+  formatEuros,
+  montantRegle,
+  resteDuDocument,
+  statutReglement,
+  type Affectation,
+} from "@/lib/payments";
 
 type Filter = "tous" | "clients" | "fournisseurs" | "tickets";
 
 type Props = {
   documents: IndexedDocument[];
+  /** Règlements enregistrés : sert à afficher le reste dû de chaque pièce. */
+  affectations: Affectation[];
   onDocuments: (next: IndexedDocument[]) => void;
   /** Contexte transmis à Electron (dossier de sauvegarde choisi par l'utilisateur). */
   hintJson: string;
@@ -86,7 +97,13 @@ function sortKey(doc: IndexedDocument): string {
  * Drive `factures/`. Le rendu ne fait que de l'orchestration : toute la logique
  * de lecture et de contrôle est dans `src/lib/documents.ts`.
  */
-export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Props) {
+export function DocumentsScreen({
+  documents,
+  affectations,
+  onDocuments,
+  hintJson,
+  onBack,
+}: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [report, setReport] = useState<ImportReport | null>(null);
@@ -333,6 +350,17 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
     setForm((current) => ({ ...current, numero: "", ttc: "", designation: "" }));
   }
 
+  /** Résumé du règlement d'une pièce, affiché dans la ligne du registre. */
+  function reglementLabel(doc: IndexedDocument): string {
+    const regle = montantRegle(doc.id, affectations);
+    if (Math.abs(regle) <= CENT) return "Aucun règlement enregistré";
+    const reste = resteDuDocument(doc, affectations);
+    const statut = STATUT_REGLEMENT_LABELS[statutReglement(doc, affectations)];
+    return Math.abs(reste) > CENT
+      ? `Réglé ${formatEuros(regle)} · reste ${formatEuros(reste)} · ${statut}`
+      : `Réglé ${formatEuros(regle)} · ${statut}`;
+  }
+
   /** Ouvre le dossier de dépôt dans l'explorateur Windows. */
   async function openInbox() {
     const api = desktopApi();
@@ -523,6 +551,9 @@ export function DocumentsScreen({ documents, onDocuments, hintJson, onBack }: Pr
                           {doc.fichier
                             ? ` · copie : ${doc.fichier.chemin}`
                             : " · aucun justificatif classé"}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {reglementLabel(doc)}
                         </p>
                         {doc.avertissements.length > 0 ? (
                           <ul className="mt-1 list-disc pl-5 text-xs text-muted-foreground">

@@ -50,6 +50,7 @@ L'application **n'émet pas** les factures : elle **importe**, indexe et conserv
 - **Ré-import sans doublon** : la clé est le numéro de facture, donc un ré-import met à jour au lieu d'empiler. Si un montant déjà indexé change, c'est signalé comme **conflit** et l'existant est conservé — une facture ne se réécrit pas en silence.
 - **Copies classées dans le dossier Drive** : `factures/<année>/FAC-2026-0002.pdf`, `factures/fournisseurs/<année>/`, et `factures/_a_classer/` pour les pièces en attente.
 - **Rattachement** : un justificatif déposé dans `_a_classer` se rattache à une pièce depuis l'écran ; s'il porte le même nom que l'export, il est classé automatiquement pendant l'import.
+- **Statut de règlement visible** : chaque ligne affiche ce qui est **réglé**, ce qu'il **reste dû** et le statut (*Impayé · Partiellement réglé · Réglé · Trop-perçu*), calculés depuis les affectations de l'écran Trésorerie.
 
 Accès par **Registre des documents** dans la section Projets (sur le PC : l'import et le classement se font à l'atelier ; le téléphone consulte l'index).
 

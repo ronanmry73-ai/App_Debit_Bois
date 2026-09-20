@@ -1762,6 +1762,7 @@ function Home() { // dsh-skip-func-length — découpage de l'écran unique : ch
         {documentsOpen && (
           <DocumentsScreen
             documents={documents}
+            affectations={affectations}
             onDocuments={setDocuments}
             hintJson={JSON.stringify({ workshopPrefs })}
             onBack={() => setDocumentsOpen(false)}
